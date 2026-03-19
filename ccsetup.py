@@ -56,7 +56,7 @@ from typing import Any, Callable
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "2.0.0"
+VERSION = "1.0.1"
 
 _USE_COLOR = sys.stdout.isatty()
 RESET  = "\033[0m"   if _USE_COLOR else ""
