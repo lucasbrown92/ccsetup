@@ -26,7 +26,7 @@ Tool Layers:
   2  Memory          claude-mind, claude-charter, claude-session cross-session
   3  Safety          parry, claude-plan-reviewer, TDD Guard      guardrails
   4  Observability   ccusage, claude-esp, cclogviewer, claudio   telemetry
-  5  Orchestration   seu-claude, ContextKit, Switchboard         scaling
+  5  Orchestration   seu-claude                                  scaling
   6  Workflow        CodeGraphContext, remote-approver, smart-fork utilities
 """
 
@@ -156,11 +156,9 @@ PRESETS: dict[str, set[str]] = {
         "ccusage", "cclogviewer", "claudio", "cship",
         "seu-claude", "codegraphcontext", "smart-fork",
         "clui-cc",
-        # Deliberately excluded from maximal: switchboard (invasive),
-        # parry/tdd-guard/plan-reviewer (manual only),
-        # claude-context (cloud deps), claude-esp (manual),
-        # contextkit (deprecated), remote-approver (manual),
-        # experimental tools (mind/charter/witness/afe/retina/ledger — use --experimental)
+        # Deliberately excluded from maximal: parry/tdd-guard/plan-reviewer (manual only),
+        # claude-context (cloud deps), claude-esp (manual), remote-approver (manual),
+        # experimental tools (mind/charter/witness/retina/ledger — use --experimental)
     },
 }
 
@@ -319,20 +317,6 @@ TOOLS: list[ToolDef] = [
         why_i_want_it="For complex multi-session projects where I need crash recovery and task persistence. This is an operating environment, not just a helper — it changes how I work.",
         skip_when="Normal sessions are sufficient. This is powerful but heavy. Don't use it unless you need it.",
         presets=["maximal"], binary="npx", mcp_key="seu-claude"),
-
-    ToolDef("contextkit", "ContextKit", 5, "Orchestration",
-        tagline="Auto-generates CLAUDE.md from codebase analysis",
-        description="Analyzes the codebase and generates structured Claude.md guidance. Historically useful for context engineering.",
-        why_i_want_it="Quick scaffolding for a new project CLAUDE.md when you don't want to write it manually.",
-        skip_when="DEPRECATED by its own maintainers. Use Claude Code's built-in /plan mode instead.",
-        deprecated=True, presets=[], binary="npx"),
-
-    ToolDef("switchboard", "Switchboard", 5, "Orchestration",
-        tagline="Aggregates all MCPs behind one entrypoint — reduces tool-schema overhead",
-        description="Migrates configs to .switchboard/ and spawns child MCPs lazily. Reduces tool-schema token overhead when many MCP servers are loaded simultaneously.",
-        why_i_want_it="If I'm loading 10+ MCP servers, every server's schema costs tokens before I even start. Switchboard compresses that overhead significantly.",
-        skip_when="You don't have a measured sprawl problem. It invasively rewrites .mcp.json.",
-        invasive=True, presets=[], binary="npx"),
 
     ToolDef("codegraphcontext", "CodeGraphContext", 6, "Workflow",
         tagline="Explicit graph queries: callers, callees, call chains, class hierarchies",
@@ -1427,60 +1411,6 @@ def layer5_orchestration(project_root: Path) -> None:
         record(SetupResult("seu-claude", "seu-claude", 5, ToolHealth.SKIPPED))
 
     hr()
-
-    # ContextKit — DEPRECATED WARNING
-    if ask_yes_no(
-        "Run ContextKit? (auto-generates CLAUDE.md from codebase analysis)\n"
-        "    ⚠  NOTE: ContextKit's own repo marks it as no longer actively maintained.\n"
-        "    Consider using Claude Code's built-in /plan mode instead.",
-        default=False,
-    ):
-        warn("ContextKit is deprecated upstream. Proceed with caution.")
-        if which("npx"):
-            try:
-                run(["npx", "-y", "contextkit", "analyze"], cwd=project_root)
-                ok("ContextKit ran — review .contextkit/ before merging into CLAUDE.md")
-                record(SetupResult("contextkit", "ContextKit", 5, ToolHealth.HEALTHY,
-                                   notes=["DEPRECATED upstream. Review output carefully.",
-                                          "Merge .contextkit/ results into CLAUDE.md manually."]))
-            except subprocess.CalledProcessError:
-                err("ContextKit failed.")
-                record(SetupResult("contextkit", "ContextKit", 5, ToolHealth.MISSING_BINARY))
-        else:
-            err("npx required.")
-    else:
-        record(SetupResult("contextkit", "ContextKit", 5, ToolHealth.SKIPPED))
-
-    hr()
-
-    # Switchboard — INVASIVE, goes last
-    if ask_yes_no(
-        "Enable Switchboard? (aggregates all MCPs behind one endpoint)\n"
-        "    Reduces tool-schema token overhead. INVASIVE: rewrites .mcp.json.\n"
-        "    Only use this when MCP sprawl is already a real, measured problem.",
-        default=False,
-    ):
-        warn("Switchboard rewrites .mcp.json and moves configs to .switchboard/")
-        warn("A timestamped backup of .mcp.json will be created first.")
-        if ask_yes_no("Confirm — run Switchboard init?", default=False):
-            if not which("npx"):
-                err("npx required.")
-                record(SetupResult("switchboard", "Switchboard", 5, ToolHealth.MISSING_BINARY))
-            else:
-                try:
-                    run(["npx", "@george5562/switchboard", "init"], cwd=project_root)
-                    ok("Switchboard initialized")
-                    record(SetupResult("switchboard", "Switchboard", 5, ToolHealth.HEALTHY,
-                                       notes=[".mcp.json now delegates to Switchboard.",
-                                              "Backup saved before mutation."]))
-                except subprocess.CalledProcessError:
-                    err("Switchboard init failed.")
-                    record(SetupResult("switchboard", "Switchboard", 5, ToolHealth.MISSING_BINARY))
-        else:
-            record(SetupResult("switchboard", "Switchboard", 5, ToolHealth.SKIPPED))
-    else:
-        record(SetupResult("switchboard", "Switchboard", 5, ToolHealth.SKIPPED))
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LAYER 6 — Workflow Utilities

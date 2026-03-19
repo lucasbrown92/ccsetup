@@ -100,8 +100,6 @@ ccsetup . --continue               # launch Claude with --continue (passed throu
 | Tool | What it does | Repo |
 |------|-------------|------|
 | **seu-claude** | Persistent memory + task tracking + sandboxed execution + multi-agent orchestration | `npm install -g seu-claude` |
-| **ContextKit** | ⚠️ Deprecated — generates CLAUDE.md scaffolding. Maintainers point to PlanKit instead | abandoned |
-| **Switchboard** | Aggregates multiple MCP servers behind a single entrypoint. Reduces tool-schema token overhead | `npx @george5562/switchboard` |
 | **claude-ledger** ⚗️ | Live capability map — `ledger_context()` replaces static tool-ledger.md at session start with opinionated routing | [bundled ↗](https://github.com/lucasbrown92/ccsetup/tree/main/claude-ledger) |
 
 ---

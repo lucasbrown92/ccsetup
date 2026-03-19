@@ -252,34 +252,6 @@ don't use it if normal sessions are sufficient.
 
 ---
 
-### ContextKit
-**What:** Generates structured CLAUDE.md guidance by analyzing the codebase.
-Historically useful for context engineering and planning scaffolding.
-
-**⚠ DEPRECATED:** ContextKit's own repo marks it as no longer actively maintained.
-The maintainers point toward PlanKit or Claude Code's built-in plan mode instead.
-
-**Skip unless:** You specifically want to inspect what it generates for historical/experimental
-reasons. Do not depend on it for production workflows.
-
----
-
-### Switchboard
-**What:** Aggregates multiple MCP servers behind a single entrypoint. Migrates configs to
-`.switchboard/` and spawns child MCPs lazily on demand. Reduces tool-schema token overhead
-when you have many MCPs loaded simultaneously.
-
-**Include when:** MCP sprawl is a real, measured problem — many servers loading simultaneously
-is noticeably degrading token efficiency.
-
-**Skip when:** You don't yet have a sprawl problem. "Switchboard sounds cool" is not
-architecture. It rewrites `.mcp.json` invasively — only use it when the benefit is clear.
-
-**Note:** Runs last in Layer 5 because it rewrites the config that all prior steps built.
-A timestamped backup is created before it runs.
-
----
-
 ## Layer 6 — Workflow Utilities
 
 ### CodeGraphContext
