@@ -14,7 +14,7 @@ Storage: .claude/charter.json in the working directory (override: CLAUDE_CHARTER
 Transport: stdio MCP (JSON-RPC 2.0). No third-party dependencies — stdlib only.
 """
 
-VERSION = "0.0.1"
+VERSION = "1.0.1"
 
 import json
 import sys
@@ -28,14 +28,20 @@ import store as _store
 # ---------------------------------------------------------------------------
 
 
-def charter_add(type_, content, notes=None, scope=None):
+def charter_add(type_, content, notes=None, scope=None, expires_at=None, deadline=None):
     data = _store.load()
-    entry = _schema.make_entry(type_, content, notes, scope=scope)
+    entry = _schema.make_entry(type_, content, notes, scope=scope,
+                               expires_at=expires_at, deadline=deadline)
     data["entries"].append(entry)
     _store.save(data)
     label = _schema.TYPE_LABELS.get(type_, type_.upper())
     scope_str = f" (scope: {', '.join(entry['scope'])})" if entry.get("scope") else ""
-    return f"Added {label} [{entry['id']}]: {entry['content']}{scope_str}"
+    temporal_str = ""
+    if entry.get("expires_at"):
+        temporal_str += f" (expires: {entry['expires_at'][:10]})"
+    if entry.get("deadline"):
+        temporal_str += f" (deadline: {entry['deadline'][:10]})"
+    return f"Added {label} [{entry['id']}]: {entry['content']}{scope_str}{temporal_str}"
 
 
 def charter_update(id_, status=None, content=None, notes=None):
@@ -120,7 +126,7 @@ def charter_summary():
     return "\n".join(lines)
 
 
-def charter_check(change_description, file_path=None):
+def charter_check(change_description, file_path=None, change_type=None):
     data = _store.load()
     entries = data["entries"]
 
@@ -140,8 +146,19 @@ def charter_check(change_description, file_path=None):
     conflicts = []
     warnings = []
 
+    CHANGE_TYPE_BOOST = {
+        "add_dependency": {"constraint", "invariant"},
+        "remove_feature": {"contract", "goal"},
+        "change_interface": {"contract"},
+        "refactor": {"invariant", "constraint"},
+    }
+
+    boost_types = CHANGE_TYPE_BOOST.get(change_type, set()) if change_type else set()
+
     for e in normative:
         score = _schema.conflict_score(change_tokens, e["content"])
+        if change_type and e["type"] in boost_types:
+            score = min(score * 2.0, 1.0)
         if score >= 0.25:
             conflicts.append((score, e))
         elif score >= 0.10:
@@ -206,6 +223,14 @@ TOOLS = [
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "File/directory paths this entry applies to. Empty = project-wide.",
+                },
+                "expires_at": {
+                    "type": "string",
+                    "description": "ISO datetime — entry auto-expires after this date (e.g. '2026-03-25T00:00:00Z').",
+                },
+                "deadline": {
+                    "type": "string",
+                    "description": "ISO datetime — flag this goal/contract when approaching deadline.",
                 },
             },
             "required": ["type", "content"],
@@ -272,6 +297,11 @@ TOOLS = [
                 "file_path": {
                     "type": "string",
                     "description": "Optional file path to scope the check to relevant entries only.",
+                },
+                "change_type": {
+                    "type": "string",
+                    "enum": ["add_dependency", "remove_feature", "change_interface", "refactor", "general"],
+                    "description": "Type of change — boosts relevant entry types 2x for better conflict detection.",
                 },
             },
             "required": ["change_description"],
@@ -343,13 +373,36 @@ def charter_audit():
             label = _schema.TYPE_LABELS.get(e["type"], e["type"].upper())
             lines.append(f"  [{e['id']}] {label}: {e['content']}")
 
+    # Temporal entries
+    now_str = datetime.now(timezone.utc).isoformat()
+    expired = []
+    past_deadline = []
+    for e in active:
+        if e.get("expires_at") and e["expires_at"] < now_str:
+            expired.append(e)
+        if e.get("deadline"):
+            if e["deadline"] < now_str:
+                past_deadline.append(e)
+
+    temporal_items = expired + past_deadline
+    if temporal_items:
+        lines.append(f"\n⏰ TEMPORAL:")
+        for e in expired:
+            label = _schema.TYPE_LABELS.get(e["type"], e["type"].upper())
+            lines.append(f"  EXPIRED [{e['id']}] {label}: {e['content']}  (expired: {e['expires_at'][:10]})")
+        for e in past_deadline:
+            label = _schema.TYPE_LABELS.get(e["type"], e["type"].upper())
+            lines.append(f"  PAST DEADLINE [{e['id']}] {label}: {e['content']}  (deadline: {e['deadline'][:10]})")
+
     return "\n".join(lines)
 
 
 def dispatch(method, params):
     if method == "charter_add":
         return charter_add(params["type"], params["content"],
-                           params.get("notes"), scope=params.get("scope"))
+                           params.get("notes"), scope=params.get("scope"),
+                           expires_at=params.get("expires_at"),
+                           deadline=params.get("deadline"))
     if method == "charter_update":
         return charter_update(
             params["id"],
@@ -363,7 +416,8 @@ def dispatch(method, params):
         return charter_summary()
     if method == "charter_check":
         return charter_check(params["change_description"],
-                             file_path=params.get("file_path"))
+                             file_path=params.get("file_path"),
+                             change_type=params.get("change_type"))
     if method == "charter_audit":
         return charter_audit()
     raise ValueError(f"Unknown method: {method}")
@@ -387,7 +441,7 @@ def handle_request(req):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "claude-charter", "version": "2.0.0"},
+                "serverInfo": {"name": "claude-charter", "version": VERSION},
             },
         })
         return

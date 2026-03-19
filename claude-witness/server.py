@@ -16,7 +16,7 @@ Charter: .claude/charter.json (override: CLAUDE_CHARTER_DIR).
 Transport: stdio MCP (JSON-RPC 2.0). stdlib only.
 """
 
-VERSION = "0.0.1"
+VERSION = "1.0.1"
 
 import json
 import os
@@ -409,13 +409,21 @@ def witness_check_charter(run_id: str | None = None) -> str:
             "Ensure tests were run with: pytest --witness"
         )
 
-    # Tokenizer (inline — no charter import needed)
-    def tokenize(text: str) -> set:
-        return set(re.findall(r"[a-z0-9_]+", text.lower()))
-
-    # Prohibition marker words — entries with these are checked for violations
-    PROHIBITION_WORDS = {"never", "not", "without", "avoid", "prevent",
-                         "prohibit", "forbidden", "disallow", "no "}
+    # Import shared tokenizer from charter's canonical source
+    try:
+        _charter_dir = str(Path(__file__).resolve().parent.parent / "claude-charter")
+        if _charter_dir not in sys.path:
+            sys.path.insert(0, _charter_dir)
+        from text_utils import tokenize, is_prohibition
+    except ImportError:
+        # Fallback: inline tokenizer if charter module not co-located
+        def tokenize(text: str) -> set:
+            return set(re.findall(r"[a-z0-9_]+", text.lower()))
+        _PROHIBITION_WORDS = {"never", "not", "without", "avoid", "prevent",
+                              "prohibit", "forbidden", "disallow", "no "}
+        def is_prohibition(content: str) -> bool:
+            lower = content.lower()
+            return any(w in lower for w in _PROHIBITION_WORDS)
 
     violations = []
     warnings = []
@@ -423,7 +431,7 @@ def witness_check_charter(run_id: str | None = None) -> str:
 
     for entry in normative:
         charter_tokens = tokenize(entry["content"])
-        is_prohibition = any(w in entry["content"].lower() for w in PROHIBITION_WORDS)
+        is_prohib = is_prohibition(entry["content"])
 
         # Score each call against this charter entry
         matching: list[tuple[float, dict]] = []
@@ -439,7 +447,7 @@ def witness_check_charter(run_id: str | None = None) -> str:
 
         matching.sort(key=lambda x: -x[0])
 
-        if matching and is_prohibition:
+        if matching and is_prohib:
             violations.append((entry, matching[:5]))
         elif matching:
             warnings.append((entry, matching[:3]))
@@ -745,7 +753,7 @@ def handle_request(req: dict):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "claude-witness", "version": "2.0.0"},
+                "serverInfo": {"name": "claude-witness", "version": VERSION},
             },
         })
         return

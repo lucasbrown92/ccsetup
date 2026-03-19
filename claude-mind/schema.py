@@ -1,5 +1,6 @@
 """Node types, statuses, filtering, and formatting for claude-mind."""
 
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -131,9 +132,11 @@ def _format_evidence(evidence_ids: list) -> str:
     """Format evidence IDs, labeling cross-tool references distinctively.
 
     Conventions:
-      witness:<run_id>:<call_id>  → [W]witness:...  (execution evidence)
-      witness:<run_id>            → [W]witness:...
-      charter:<entry_id>          → [C]charter:...  (normative reference)
+      witness:<run_id>:<call_id>          → [W]witness:...  (execution evidence)
+      witness:<run_id>                    → [W]witness:...
+      charter:<entry_id>                  → [C]charter:...  (normative reference)
+      retina:<capture_id>                 → [R]retina:...   (visual/snapshot evidence)
+      mind:<investigation_id>:<node_id>   → [M]mind:...     (cross-investigation reference)
     """
     formatted = []
     for eid in evidence_ids:
@@ -141,6 +144,89 @@ def _format_evidence(evidence_ids: list) -> str:
             formatted.append(f"[W]{eid}")
         elif eid.startswith("charter:"):
             formatted.append(f"[C]{eid}")
+        elif eid.startswith("retina:"):
+            formatted.append(f"[R]{eid}")
+        elif eid.startswith("mind:"):
+            formatted.append(f"[M]{eid}")
         else:
             formatted.append(eid)
     return ", ".join(formatted)
+
+
+# ── History search & risk scoring ────────────────────────────────────────────
+
+def search_history(data, query, limit=5, node_types=None):
+    """Search archived investigations for matching content.
+
+    Returns list of dicts: {investigation, matching_nodes} sorted by relevance.
+    """
+    history = data.get("history", [])
+    if not history:
+        return []
+
+    query_tokens = set(re.findall(r"[a-z0-9_]+", query.lower()))
+    if not query_tokens:
+        return []
+
+    scored = []
+    for entry in history:
+        inv = entry.get("investigation", {})
+        nodes = entry.get("nodes", [])
+
+        # Score investigation-level fields
+        inv_text = f"{inv.get('title', '')} {inv.get('conclusion', '')}".lower()
+        inv_tokens = set(re.findall(r"[a-z0-9_]+", inv_text))
+        inv_overlap = len(query_tokens & inv_tokens)
+
+        # Score nodes
+        matching_nodes = []
+        for node in nodes:
+            if node_types and node["type"] not in node_types:
+                continue
+            node_text = f"{node.get('content', '')} {node.get('notes', '')}".lower()
+            node_tokens = set(re.findall(r"[a-z0-9_]+", node_text))
+            node_overlap = len(query_tokens & node_tokens)
+            if node_overlap > 0:
+                matching_nodes.append((node_overlap, node))
+
+        total_score = inv_overlap * 2 + sum(s for s, _ in matching_nodes)
+        if total_score > 0:
+            matching_nodes.sort(key=lambda x: -x[0])
+            scored.append((total_score, inv, [n for _, n in matching_nodes[:5]]))
+
+    scored.sort(key=lambda x: -x[0])
+    return [
+        {"investigation": inv, "matching_nodes": nodes}
+        for _, inv, nodes in scored[:limit]
+    ]
+
+
+def compute_risk_score(node, all_nodes, now_utc=None):
+    """Compute risk score for an assumption node: age_hours * max(dependents, 1) * (1 - confidence).
+
+    Returns dict: {node_id, content, risk_score, age_hours, dependent_count, confidence}
+    """
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+
+    created = node.get("created_at", "")
+    try:
+        created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        age_hours = (now_utc - created_dt).total_seconds() / 3600
+    except (ValueError, TypeError):
+        age_hours = 0.0
+
+    dependents = find_dependents(all_nodes, node["id"])
+    dep_count = len(dependents)
+    confidence = node.get("confidence") or 0.0
+
+    risk = age_hours * max(dep_count, 1) * (1.0 - confidence)
+
+    return {
+        "node_id": node["id"],
+        "content": node["content"],
+        "risk_score": round(risk, 2),
+        "age_hours": round(age_hours, 1),
+        "dependent_count": dep_count,
+        "confidence": confidence,
+    }

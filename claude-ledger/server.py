@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """claude-ledger MCP server — operational router and meta-orchestrator.
 
-7 tools:
+12 tools:
   ledger_context    (none)                       — CALL THIS FIRST: full operational brief
   ledger_query      task, healthy_only?           — concrete call sequence for any task
   ledger_rules      section?                      — operational rules (anti-patterns, gates)
@@ -9,17 +9,24 @@
   ledger_health     tool?                         — real-time health check
   ledger_workflows  tag?                          — canonical workflow patterns
   ledger_catalog    mcp_key?, configured_only?    — full tool signatures
+  ledger_diagnose   tool?                         — full prerequisite diagnosis + fix steps
+  ledger_fix        tool                          — apply auto-fixable fixes (hooks, env, langs)
+  ledger_mode       mode?                         — get or set token priority mode
+  ledger_preflight  change, files?               — pre-change impact synthesis (CLEAR/CAUTION/BLOCKED)
+  ledger_correlate  query, scope?                — unified cross-tool search
 
 Design intent: ledger_context() is the FIRST call every session. It returns the complete
 operational brief Claude needs to route correctly without reminders from the user.
 ledger_query(task) returns the concrete call sequence — not just which server, but which
 functions to call in which order.
+ledger_diagnose/ledger_fix: when a tool is degraded, diagnose root cause and fix it —
+never accept a broken tool and silently route around it.
 
 Reads .mcp.json and .claude/ state in CWD at runtime (never cached).
 Transport: stdio MCP (JSON-RPC 2.0). stdlib only.
 """
 
-VERSION = "0.0.1"
+VERSION = "1.0.1"
 
 import json
 import sys
@@ -32,6 +39,24 @@ import catalog as _catalog
 import health as _health
 import router as _router
 import rules as _rules
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mode persistence helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _load_mode() -> str:
+    p = Path(".claude") / "ledger-mode.json"
+    try:
+        return json.loads(p.read_text())["mode"]
+    except Exception:
+        return "balanced"
+
+
+def _save_mode(mode: str) -> None:
+    p = Path(".claude") / "ledger-mode.json"
+    p.parent.mkdir(exist_ok=True)
+    p.write_text(json.dumps({"mode": mode}))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -53,6 +78,7 @@ _WORKFLOWS: dict[str, dict] = {
         "title": "After Context Compaction",
         "steps": [
             "mind_summary()                → recover investigation state (≤15 lines)",
+            "mind_sweep()                  → check for stale assumptions after recovery",
             "charter_summary()             → recover project constraints",
             "graph_continue(query)         → recover file context",
             "(all three can run in parallel)",
@@ -151,6 +177,8 @@ def ledger_context() -> str:
     3. WHAT is currently active (investigations, failures, state)
     4. WHAT to do next
     """
+    mode = _load_mode()
+    profile = _rules.MODE_PROFILES[mode]
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     servers = _health.load_mcp_servers()
     all_healths = _health.check_all()
@@ -160,6 +188,9 @@ def ledger_context() -> str:
     lines = [
         f"LEDGER CONTEXT — {now_str}",
         "═" * 60,
+        f"PRIORITY MODE: {profile['label']}",
+        "─" * 21,
+        profile["description"],
         "",
     ]
 
@@ -225,7 +256,20 @@ def ledger_context() -> str:
         + ")",
     ]
     for h in degraded:
-        lines.append(f"  ⚠  {h['mcp_key']} — {h['detail']}")
+        mcp_key = h["mcp_key"]
+        lines.append(f"  ⚠  {mcp_key} — {h['detail']}")
+        # Run prerequisite diagnosis for additional context
+        diag = _health.diagnose_tool(mcp_key)
+        for issue in diag.get("issues", []):
+            lines.append(f"       root cause: {issue}")
+        fixes = diag.get("fixes", [])
+        if fixes:
+            auto_fixes = [f for f in fixes if f.get("auto")]
+            manual_fixes = [f for f in fixes if not f.get("auto")]
+            if auto_fixes:
+                lines.append(f"       → ledger_fix('{mcp_key}') will auto-apply {len(auto_fixes)} fix(es)")
+            for f in manual_fixes:
+                lines.append(f"       manual: {f['step'].splitlines()[0]}")
     lines.append("")
 
     # ── ACTIVE STATE ──────────────────────────────────────────────────────
@@ -282,6 +326,30 @@ def ledger_context() -> str:
 
     lines.append("")
 
+    # ── PATTERNS (recurring problem areas) ────────────────────────────────
+    if "claude-mind" in servers:
+        mind_data = _health._read_json_safe(_health._claude_dir() / "mind.json")
+        if mind_data:
+            file_counts: dict[str, int] = {}
+            for entry in mind_data.get("history", []):
+                seen_files: set[str] = set()
+                for n in entry.get("nodes", []):
+                    for f in n.get("files", []):
+                        seen_files.add(f)
+                for f in seen_files:
+                    file_counts[f] = file_counts.get(f, 0) + 1
+
+            chronic = [(f, c) for f, c in file_counts.items() if c >= 3]
+            if chronic:
+                chronic.sort(key=lambda x: -x[1])
+                lines += [
+                    "PATTERNS (recurring problem areas)",
+                    "─" * 40,
+                ]
+                for f, c in chronic[:5]:
+                    lines.append(f"  {f} — appeared in {c} past investigations")
+                lines.append("")
+
     # ── RECOMMENDED NEXT ──────────────────────────────────────────────────
     lines += [
         "RECOMMENDED NEXT",
@@ -310,29 +378,31 @@ def ledger_context() -> str:
     # Always: start with graph_continue
     recs.append(("graph_continue(query)", "get ranked file context before any work"))
 
-    for i, (call, reason) in enumerate(recs[:4], 1):
+    rec_limit = profile["context_rec_limit"]
+    for i, (call, reason) in enumerate(recs[:rec_limit], 1):
         lines.append(f"  {i}. {call}")
         lines.append(f"     → {reason}")
 
     lines.append("")
 
     # ── MISSING TOOLS ──────────────────────────────────────────────────────
-    configured_keys = set(servers.keys())
-    all_catalog_keys = set(_catalog.TOOL_CATALOG.keys())
-    missing = all_catalog_keys - configured_keys - {"claude-ledger"}
+    if profile["show_not_configured"]:
+        configured_keys = set(servers.keys())
+        all_catalog_keys = set(_catalog.TOOL_CATALOG.keys())
+        missing = all_catalog_keys - configured_keys - {"claude-ledger"}
 
-    if missing:
-        lines += [
-            "NOT CONFIGURED (run ccsetup to add)",
-            "─" * 40,
-        ]
-        for key in sorted(missing)[:4]:
-            tools = _catalog.TOOL_CATALOG.get(key, [])
-            if tools:
-                layer = _catalog.LAYER_MAP.get(key, "?")
-                layer_name = _catalog.LAYER_NAMES.get(layer, f"Layer {layer}")
-                lines.append(f"  {key} (Layer {layer} — {layer_name}): {tools[0][2].lower()}")
-        lines.append("")
+        if missing:
+            lines += [
+                "NOT CONFIGURED (run ccsetup to add)",
+                "─" * 40,
+            ]
+            for key in sorted(missing)[:4]:
+                tools = _catalog.TOOL_CATALOG.get(key, [])
+                if tools:
+                    layer = _catalog.LAYER_MAP.get(key, "?")
+                    layer_name = _catalog.LAYER_NAMES.get(layer, f"Layer {layer}")
+                    lines.append(f"  {key} (Layer {layer} — {layer_name}): {tools[0][2].lower()}")
+            lines.append("")
 
     lines += [
         "─" * 60,
@@ -344,12 +414,16 @@ def ledger_context() -> str:
     return "\n".join(lines)
 
 
-def ledger_query(task: str, healthy_only: bool = False) -> str:
+def ledger_query(task: str, healthy_only: bool = False, mode: str | None = None) -> str:
     """Return the concrete call sequence for a task description.
 
     Not just 'use serena' — but 'call get_symbols_overview, then find_symbol,
     then graph_read(file::symbol)' with notes on parallelism and what to avoid.
     """
+    if mode is None:
+        mode = _load_mode()
+    profile = _rules.MODE_PROFILES.get(mode, _rules.MODE_PROFILES["balanced"])
+
     servers = _health.load_mcp_servers()
     all_healths = {r["mcp_key"]: r for r in _health.check_all()}
 
@@ -357,11 +431,11 @@ def ledger_query(task: str, healthy_only: bool = False) -> str:
     if healthy_only:
         available_keys = {k for k, h in all_healths.items() if h.get("healthy")}
 
-    # 1. Match PRIORITY_CHAINS by task keywords
-    matched_chains = _rules.match_chain(task)
+    # 1. Match PRIORITY_CHAINS by task keywords (mode applies chain_limit + chain_truncate)
+    matched_chains = _rules.match_chain(task, mode=mode)
 
-    # 2. Score MCP routes
-    routes = _router.route(task, available_keys=available_keys, top_n=5)
+    # 2. Score MCP routes (mode applies route_max, route_min_score, weight muls)
+    routes = _router.route(task, available_keys=available_keys, mode=mode)
 
     if not matched_chains and not routes:
         return (
@@ -380,13 +454,10 @@ def ledger_query(task: str, healthy_only: bool = False) -> str:
             "─" * 40,
         ]
         for step in top_chain["chain"]:
-            # Check if the tool in this step is configured and healthy
-            step_lower = step.lower()
-            configured = any(k.replace("-", "_") in step_lower or k in step_lower for k in servers)
             lines.append(f"  {step}")
         lines.append("")
 
-        if top_chain.get("parallel_tip"):
+        if profile["show_parallel_tips"] and top_chain.get("parallel_tip"):
             lines.append(f"  PARALLEL: {top_chain['parallel_tip']}")
             lines.append("")
 
@@ -395,15 +466,16 @@ def ledger_query(task: str, healthy_only: bool = False) -> str:
             lines.append("")
 
         # Show other matched chains if different
-        for _, chain in matched_chains[1:2]:
-            if chain["goal"] != top_chain["goal"]:
-                lines += [
-                    f"ALSO RELEVANT ({chain['goal']})",
-                    "─" * 40,
-                ]
-                for step in chain["chain"][:4]:
-                    lines.append(f"  {step}")
-                lines.append("")
+        if profile["show_alt_chains"]:
+            for _, chain in matched_chains[1:2]:
+                if chain["goal"] != top_chain["goal"]:
+                    lines += [
+                        f"ALSO RELEVANT ({chain['goal']})",
+                        "─" * 40,
+                    ]
+                    for step in chain["chain"][:4]:
+                        lines.append(f"  {step}")
+                    lines.append("")
 
     # Show MCP server scores
     if routes:
@@ -411,7 +483,7 @@ def ledger_query(task: str, healthy_only: bool = False) -> str:
             "CONFIGURED TOOLS (by relevance score)",
             "─" * 40,
         ]
-        for r in routes[:4]:
+        for r in routes:
             key = r["mcp_key"]
             h = all_healths.get(key, {})
             status = "✓" if h.get("healthy") else ("⚠" if h.get("configured") else "○")
@@ -436,15 +508,16 @@ def ledger_query(task: str, healthy_only: bool = False) -> str:
             lines.append("")
 
     # Check for applicable skills
-    applicable_skills = [
-        s for s in _rules.SKILLS_CATALOG
-        if any(t in task.lower() for t in s["trigger"].split())
-    ]
-    if applicable_skills:
-        lines += ["SKILLS (Skill tool)", "─" * 40]
-        for s in applicable_skills[:2]:
-            lines.append(f"  {s['invoke']}  — {s['description']}")
-        lines.append("")
+    if profile["show_skills"]:
+        applicable_skills = [
+            s for s in _rules.SKILLS_CATALOG
+            if any(t in task.lower() for t in s["trigger"].split())
+        ]
+        if applicable_skills:
+            lines += ["SKILLS (Skill tool)", "─" * 40]
+            for s in applicable_skills[:2]:
+                lines.append(f"  {s['invoke']}  — {s['description']}")
+            lines.append("")
 
     lines.append("→ ledger_rules() for anti-pattern guide")
     return "\n".join(lines)
@@ -606,6 +679,144 @@ def ledger_health(tool: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def ledger_diagnose(tool: str | None = None) -> str:
+    """Full prerequisite diagnosis for one or all configured tools.
+
+    For each tool: checks binaries, hooks, files, env vars, and config drift.
+    Returns root cause + exact fix steps for every issue found.
+    """
+    servers = _health.load_mcp_servers()
+    keys = [tool] if tool else list(servers.keys())
+
+    if not keys:
+        return "No MCP servers configured in .mcp.json.\nRun: ccsetup . to configure tools."
+
+    all_clean = True
+    lines: list[str] = []
+
+    for key in keys:
+        diag = _health.diagnose_tool(key)
+        issues = diag.get("issues", [])
+        fixes = diag.get("fixes", [])
+        base = diag.get("base_health", {})
+
+        if not issues and base.get("healthy"):
+            lines.append(f"✓  {key}  — all prerequisites satisfied")
+            continue
+
+        all_clean = False
+        lines.append(f"✗  {key}")
+
+        if not base.get("healthy"):
+            lines.append(f"   base: {base.get('detail', 'unhealthy')}")
+
+        why = diag.get("why", "")
+        if why:
+            lines.append(f"   why:  {why[:120]}")
+
+        for i, issue in enumerate(issues, 1):
+            lines.append(f"   [{i}] {issue}")
+
+        if fixes:
+            lines.append("   fixes:")
+            for f in fixes:
+                auto_tag = " (auto-fixable)" if f.get("auto") else " (manual)"
+                target = f"  → {f['target']}" if f.get("target") else ""
+                lines.append(f"     {'✓' if f.get('auto') else '!'} {f['step'].splitlines()[0]}{target}{auto_tag}")
+
+        docs = diag.get("docs", "")
+        if docs:
+            lines.append(f"   docs: {docs}")
+
+        fixable = diag.get("fixable_count", 0)
+        if fixable:
+            lines.append(f"   → call ledger_fix('{key}') to auto-apply {fixable} fix(es)")
+
+        lines.append("")
+
+    if all_clean and keys:
+        lines.append("")
+        lines.append("All diagnosed tools are fully configured.")
+
+    return "\n".join(lines).rstrip()
+
+
+def ledger_fix(tool: str) -> str:
+    """Apply all auto-fixable prerequisite fixes for a tool.
+
+    Writes to ~/.claude/settings.json (hooks), .mcp.json (env vars),
+    or .serena/project.yml (language list) as needed.
+    Reports exactly what was changed. Non-auto-fixable issues are listed
+    with manual instructions.
+    """
+    diag = _health.diagnose_tool(tool)
+    fixes = diag.get("fixes", [])
+
+    if not fixes:
+        base = diag.get("base_health", {})
+        if base.get("healthy") and not diag.get("issues"):
+            return f"✓ {tool} — no fixes needed, all prerequisites satisfied."
+        return f"{tool} — no fix specs available. Check: ledger_diagnose('{tool}')"
+
+    applied: list[str] = []
+    skipped: list[str] = []
+
+    for f in fixes:
+        if f.get("auto"):
+            result = _health.apply_fix(f)
+            applied.append(result)
+        else:
+            first_line = f["step"].splitlines()[0]
+            skipped.append(f"  (manual) {first_line}")
+            # Show full multi-line fix instructions for manual steps
+            full = f["step"]
+            if "\n" in full:
+                for line in full.splitlines()[1:]:
+                    skipped.append(f"    {line}")
+
+    lines = [f"ledger_fix({tool!r})"]
+    lines.append("")
+
+    if applied:
+        lines.append(f"Applied ({len(applied)}):")
+        for a in applied:
+            lines.append(f"  ✓ {a}")
+        lines.append("")
+        lines.append("Restart Claude Code (or reload MCP) for changes to take effect.")
+        lines.append("")
+
+    if skipped:
+        lines.append(f"Still needs manual action ({len(skipped)}):")
+        for s in skipped:
+            lines.append(s)
+        docs = diag.get("docs", "")
+        if docs:
+            lines.append(f"  docs: {docs}")
+        lines.append("")
+
+    if not applied and not skipped:
+        lines.append("Nothing to fix.")
+
+    return "\n".join(lines).rstrip()
+
+
+def ledger_mode(mode: str | None = None) -> str:
+    """Get or set the token priority mode (economy | balanced | performance)."""
+    if mode is None:
+        current = _load_mode()
+        p = _rules.MODE_PROFILES[current]
+        return (
+            f"Current mode: {p['label']}\n"
+            f"{p['description']}\n\n"
+            "Available: economy | balanced | performance"
+        )
+    if mode not in ("economy", "balanced", "performance"):
+        return f"Invalid mode {mode!r}. Choose: economy | balanced | performance"
+    _save_mode(mode)
+    p = _rules.MODE_PROFILES[mode]
+    return f"Mode set to {p['label']}: {p['description']}"
+
+
 def ledger_workflows(tag: str | None = None) -> str:
     if tag:
         tag_lower = tag.lower()
@@ -679,6 +890,298 @@ def ledger_catalog(mcp_key: str | None = None, configured_only: bool = False) ->
     lines.append("Use ledger_catalog('skills') for full skills detail.")
 
     return "\n".join(lines)
+
+
+_CHANGE_TYPE_BOOST: dict[str, set[str]] = {
+    "add_dependency": {"constraint", "invariant"},
+    "remove_feature": {"contract", "goal"},
+    "change_interface": {"contract"},
+    "refactor": {"invariant", "constraint"},
+}
+
+
+def ledger_preflight(change: str, files: list[str] | None = None,
+                     change_type: str | None = None) -> str:
+    """Pre-change impact synthesis across all cognitive tools.
+
+    Reads .claude/ stores and returns a unified report:
+    - CHARTER: conflict scoring against normative entries
+    - MIND: nodes referencing affected files, open assumptions
+    - WITNESS: exception history for affected files/functions
+    - RETINA: baselines referencing affected URLs/labels
+    - VERDICT: CLEAR / CAUTION / BLOCKED
+    """
+    import re
+    files = files or []
+    lines = [f"PREFLIGHT: {change}", ""]
+
+    blockers = []
+    warnings = []
+
+    boost_types = _CHANGE_TYPE_BOOST.get(change_type or "", set())
+
+    # ── CHARTER ──
+    charter_data = _health._read_json_safe(_health._claude_dir() / "charter.json")
+    if charter_data:
+        entries = charter_data.get("entries", [])
+        normative = [
+            e for e in entries
+            if e.get("type") in ("invariant", "constraint", "contract")
+            and e.get("status") == "active"
+        ]
+        if normative:
+            change_tokens = set(re.findall(r"[a-z0-9_]+", change.lower()))
+            charter_conflicts = []
+            prohibition_words = {"never", "not", "no", "without", "avoid", "forbidden"}
+            for e in normative:
+                entry_tokens = set(re.findall(r"[a-z0-9_]+", e["content"].lower()))
+                if not entry_tokens:
+                    continue
+                overlap = change_tokens & entry_tokens
+                score = len(overlap) / len(entry_tokens)
+                # Apply change_type boost
+                if boost_types and e.get("type") in boost_types:
+                    score = min(score * 2.0, 1.0)
+                # Check prohibition
+                is_prohib = any(w in e["content"].lower() for w in prohibition_words)
+                if is_prohib and score > 0:
+                    score = min(score * 1.5, 1.0)
+                if score >= 0.25:
+                    charter_conflicts.append((score, e))
+                elif score >= 0.10:
+                    warnings.append(f"charter [{e['id']}]: {e['content']} (overlap {score:.0%})")
+
+            if charter_conflicts:
+                lines.append(f"CHARTER — {len(charter_conflicts)} CONFLICT(S):")
+                for score, e in sorted(charter_conflicts, key=lambda x: -x[0]):
+                    prohib = " ⛔" if any(w in e["content"].lower() for w in prohibition_words) else ""
+                    lines.append(f"  [{e['id']}] {e['type'].upper()}{prohib}: {e['content']}  ({score:.0%})")
+                    blockers.append(f"charter conflict: {e['content'][:50]}")
+                lines.append("")
+            else:
+                lines.append(f"CHARTER — clear ({len(normative)} entries checked)")
+                lines.append("")
+    else:
+        lines.append("CHARTER — no charter.json found")
+        lines.append("")
+
+    # ── MIND ──
+    mind_data = _health._read_json_safe(_health._claude_dir() / "mind.json")
+    if mind_data and mind_data.get("investigation"):
+        nodes = mind_data.get("nodes", [])
+        # Find nodes whose files overlap with affected files
+        related_nodes = []
+        if files:
+            for n in nodes:
+                node_files = n.get("files", [])
+                for nf in node_files:
+                    if any(f in nf or nf in f for f in files):
+                        related_nodes.append(n)
+                        break
+
+        open_assumptions = [
+            n for n in nodes
+            if n["type"] == "assumption" and n["status"] == "open"
+        ]
+
+        mind_items = []
+        if related_nodes:
+            mind_items.append(f"{len(related_nodes)} node(s) reference affected files")
+            for n in related_nodes[:3]:
+                mind_items.append(f"  [{n['id']}] {n['type']}: {n['content']}")
+        if open_assumptions:
+            risky = [n for n in open_assumptions if any(
+                any(f in nf or nf in f for f in files)
+                for nf in n.get("files", [])
+            )] if files else open_assumptions
+            if risky:
+                warnings.append(f"{len(risky)} open assumption(s) about affected files")
+                mind_items.append(f"⚠ {len(risky)} open assumption(s) about these files")
+                for n in risky[:2]:
+                    mind_items.append(f"  [{n['id']}] {n['content']}")
+
+        if mind_items:
+            inv_title = mind_data["investigation"].get("title", "?")
+            lines.append(f"MIND — investigation '{inv_title}':")
+            lines.extend(f"  {item}" for item in mind_items)
+        else:
+            lines.append("MIND — no related nodes")
+        lines.append("")
+    else:
+        lines.append("MIND — no active investigation")
+        lines.append("")
+
+    # ── WITNESS ──
+    witness_state = _health.witness_active_state()
+    if witness_state:
+        witness_items = []
+        if witness_state.get("recent_failures"):
+            warnings.append(f"{witness_state['recent_failures']} recent test failures")
+            witness_items.append(f"⚠ {witness_state['recent_failures']} recent failures")
+
+        # Check if affected files have exception history
+        witness_dir = _health._claude_dir() / "witness"
+        if witness_dir.exists() and files:
+            run_files = sorted(witness_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            exc_in_files = set()
+            for rf in run_files[:3]:
+                rd = _health._read_json_safe(rf)
+                if rd:
+                    for exc in rd.get("exceptions", []):
+                        exc_file = exc.get("file", "")
+                        if any(f in exc_file or exc_file.endswith(f) for f in files):
+                            exc_in_files.add(f"{exc.get('type', '?')} in {exc_file}")
+            if exc_in_files:
+                warnings.append(f"exceptions in affected files: {', '.join(list(exc_in_files)[:3])}")
+                witness_items.append(f"Recent exceptions in affected files:")
+                for ex in list(exc_in_files)[:3]:
+                    witness_items.append(f"  {ex}")
+
+        if witness_items:
+            lines.append(f"WITNESS — {witness_state['recent_runs']} recent runs:")
+            lines.extend(f"  {item}" for item in witness_items)
+        else:
+            lines.append(f"WITNESS — {witness_state['recent_runs']} runs, no issues in affected files")
+        lines.append("")
+    else:
+        lines.append("WITNESS — no runs found")
+        lines.append("")
+
+    # ── RETINA ──
+    retina_state = _health.retina_active_state()
+    if retina_state and (retina_state.get("captures") or retina_state.get("baselines")):
+        lines.append(f"RETINA — {retina_state['captures']} captures, {retina_state['baselines']} baselines")
+        if retina_state.get("baseline_names"):
+            lines.append(f"  active baselines: {', '.join(retina_state['baseline_names'][:5])}")
+        lines.append("")
+    else:
+        lines.append("RETINA — no captures or baselines")
+        lines.append("")
+
+    # ── VERDICT ──
+    if blockers:
+        verdict = "BLOCKED"
+        lines.append(f"VERDICT: ⛔ {verdict}")
+        lines.append("  Resolve charter conflicts before proceeding:")
+        for b in blockers:
+            lines.append(f"  - {b}")
+    elif warnings:
+        verdict = "CAUTION"
+        lines.append(f"VERDICT: ⚠ {verdict}")
+        for w in warnings:
+            lines.append(f"  - {w}")
+    else:
+        verdict = "CLEAR"
+        lines.append(f"VERDICT: ✓ {verdict}")
+        lines.append("  No conflicts, no open risks in affected files.")
+
+    return "\n".join(lines)
+
+
+def ledger_correlate(query: str, scope: str | None = None) -> str:
+    """Unified cross-tool search — find everything known about a topic."""
+    import re
+    query_tokens = set(re.findall(r"[a-z0-9_]+", query.lower()))
+    if not query_tokens:
+        return "Empty query. Provide search terms."
+
+    results: dict[str, list[str]] = {}
+
+    # ── MIND ──
+    if scope in (None, "mind"):
+        mind_data = _health._read_json_safe(_health._claude_dir() / "mind.json")
+        if mind_data:
+            mind_hits = []
+            # Current nodes
+            for n in mind_data.get("nodes", []):
+                text = f"{n.get('content', '')} {n.get('notes', '')} {' '.join(n.get('files', []))}".lower()
+                text_tokens = set(re.findall(r"[a-z0-9_]+", text))
+                if query_tokens & text_tokens:
+                    status = f" ({n['status']})" if n.get("status", "open") != "open" else ""
+                    mind_hits.append(f"[{n['id']}] {n['type'].upper()}{status}: {n['content']}")
+            # Archived
+            for entry in mind_data.get("history", []):
+                inv = entry.get("investigation", {})
+                inv_text = f"{inv.get('title', '')} {inv.get('conclusion', '')}".lower()
+                inv_tokens = set(re.findall(r"[a-z0-9_]+", inv_text))
+                if query_tokens & inv_tokens:
+                    resolved = inv.get("resolved_at", "")[:10] if inv.get("resolved_at") else "?"
+                    mind_hits.append(f"[archived] {inv.get('title', '?')} ({resolved}): {inv.get('conclusion', '?')}")
+                for n in entry.get("nodes", []):
+                    text = f"{n.get('content', '')} {n.get('notes', '')}".lower()
+                    text_tokens = set(re.findall(r"[a-z0-9_]+", text))
+                    if query_tokens & text_tokens:
+                        mind_hits.append(f"  [{n['id']}] {n['type']}: {n['content'][:60]}")
+                        if len(mind_hits) > 15:
+                            break
+                if len(mind_hits) > 15:
+                    break
+            if mind_hits:
+                results["MIND"] = mind_hits[:10]
+
+    # ── CHARTER ──
+    if scope in (None, "charter"):
+        charter_data = _health._read_json_safe(_health._claude_dir() / "charter.json")
+        if charter_data:
+            charter_hits = []
+            for e in charter_data.get("entries", []):
+                text = f"{e.get('content', '')} {e.get('notes', '')}".lower()
+                text_tokens = set(re.findall(r"[a-z0-9_]+", text))
+                if query_tokens & text_tokens:
+                    status = f" [{e['status']}]" if e.get("status") != "active" else ""
+                    charter_hits.append(f"[{e['id']}] {e['type'].upper()}{status}: {e['content']}")
+            if charter_hits:
+                results["CHARTER"] = charter_hits[:10]
+
+    # ── WITNESS ──
+    if scope in (None, "witness"):
+        witness_dir = _health._claude_dir() / "witness"
+        if witness_dir.exists():
+            witness_hits = []
+            run_files = sorted(witness_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for rf in run_files[:3]:
+                rd = _health._read_json_safe(rf)
+                if not rd:
+                    continue
+                rid = rd.get("run_id", "?")
+                for call in rd.get("calls", []):
+                    fn_lower = call.get("fn", "").lower()
+                    if any(t in fn_lower for t in query_tokens):
+                        exc = " [exception]" if call.get("exception") else ""
+                        witness_hits.append(f"[{rid}] {call['fn']}  {call.get('file', '?')}:{call.get('line', '?')}{exc}")
+                        if len(witness_hits) >= 8:
+                            break
+                if len(witness_hits) >= 8:
+                    break
+            if witness_hits:
+                results["WITNESS"] = witness_hits[:8]
+
+    # ── RETINA ──
+    if scope in (None, "retina"):
+        retina_data = _health._read_json_safe(Path(_health._claude_dir() / "retina" / "retina.json"))
+        if retina_data:
+            retina_hits = []
+            for cap in retina_data.get("captures", []):
+                text = f"{cap.get('url', '')} {cap.get('label', '')}".lower()
+                if any(t in text for t in query_tokens):
+                    retina_hits.append(f"[{cap.get('type', '?')}] {cap.get('url', '?')}  label:{cap.get('label', '-')}")
+            for name, bl in retina_data.get("baselines", {}).items():
+                if any(t in name.lower() for t in query_tokens):
+                    retina_hits.append(f"[baseline] {name}: {bl.get('url', '?')}")
+            if retina_hits:
+                results["RETINA"] = retina_hits[:5]
+
+    if not results:
+        return f"No results for '{query}' across cognitive tools."
+
+    lines = [f"CORRELATE: '{query}'", ""]
+    for tool_name, hits in results.items():
+        lines.append(f"{tool_name} ({len(hits)} match{'es' if len(hits) != 1 else ''}):")
+        for h in hits:
+            lines.append(f"  {h}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -786,6 +1289,120 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "ledger_diagnose",
+        "description": (
+            "Full prerequisite diagnosis for one or all configured tools. "
+            "Checks binaries, hooks in settings.json, required files, env vars, and "
+            "config drift (e.g. Serena language mismatch). Returns root cause + exact "
+            "fix steps for every issue. Call this whenever a tool is degraded or "
+            "behaving unexpectedly — never just accept a degraded tool."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tool": {
+                    "type": "string",
+                    "description": "MCP key to diagnose (e.g. 'claude-session'). Omit to diagnose all configured tools.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ledger_fix",
+        "description": (
+            "Apply all auto-fixable prerequisite fixes for a tool. "
+            "Writes hooks to ~/.claude/settings.json, env vars to .mcp.json, "
+            "or languages to .serena/project.yml. Reports exactly what was changed. "
+            "Non-auto-fixable issues are listed with manual instructions. "
+            "Always call ledger_diagnose first to see what will be changed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tool": {
+                    "type": "string",
+                    "description": "MCP key to fix (e.g. 'claude-session', 'serena').",
+                },
+            },
+            "required": ["tool"],
+        },
+    },
+    {
+        "name": "ledger_mode",
+        "description": (
+            "Get or set the token priority mode. "
+            "economy: minimal token spend, single best path, no exploration. "
+            "balanced: default, good capability/cost ratio. "
+            "performance: comprehensive, invest tokens in thorough tool activation. "
+            "Mode persists in .claude/ledger-mode.json and applies to all subsequent "
+            "ledger_context() and ledger_query() calls automatically."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "description": "economy | balanced | performance. Omit to read current mode.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ledger_preflight",
+        "description": (
+            "Pre-change impact synthesis. Checks charter conflicts, mind assumptions about "
+            "affected files, witness exception history, and retina baselines. "
+            "Returns CLEAR / CAUTION / BLOCKED verdict. "
+            "Use BEFORE structural changes — subsumes standalone charter_check. "
+            "Pass change_type for 2x boost on relevant charter entry types."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "change": {
+                    "type": "string",
+                    "description": "Plain-language description of the proposed change.",
+                },
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "File paths affected by the change.",
+                },
+                "change_type": {
+                    "type": "string",
+                    "enum": ["add_dependency", "remove_feature", "change_interface", "refactor", "general"],
+                    "description": "Type of change — boosts relevant charter entry types 2x for sharper conflict detection.",
+                },
+            },
+            "required": ["change"],
+        },
+    },
+    {
+        "name": "ledger_correlate",
+        "description": (
+            "Unified cross-tool search. Finds everything known about a topic across "
+            "mind (nodes + archived investigations), charter (entries), witness (function calls), "
+            "and retina (captures/baselines). Use when you need the full picture on a topic."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search terms to match across all cognitive tools.",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["mind", "charter", "witness", "retina"],
+                    "description": "Limit search to a single tool. Omit for all.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
@@ -804,6 +1421,17 @@ def dispatch(method: str, params: dict) -> str:
         return ledger_workflows(tag=params.get("tag"))
     if method == "ledger_catalog":
         return ledger_catalog(mcp_key=params.get("mcp_key"), configured_only=params.get("configured_only", False))
+    if method == "ledger_diagnose":
+        return ledger_diagnose(tool=params.get("tool"))
+    if method == "ledger_fix":
+        return ledger_fix(tool=params["tool"])
+    if method == "ledger_mode":
+        return ledger_mode(mode=params.get("mode"))
+    if method == "ledger_preflight":
+        return ledger_preflight(params["change"], files=params.get("files"),
+                                change_type=params.get("change_type"))
+    if method == "ledger_correlate":
+        return ledger_correlate(params["query"], scope=params.get("scope"))
     raise ValueError(f"Unknown method: {method}")
 
 
@@ -823,7 +1451,7 @@ def handle_request(req: dict) -> None:
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "claude-ledger", "version": "2.0.0"},
+                "serverInfo": {"name": "claude-ledger", "version": VERSION},
             },
         })
         return

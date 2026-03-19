@@ -124,7 +124,7 @@ ccsetup . --experimental                    # just the experimental tools, inter
 
 In interactive mode they appear as normal opt-in prompts, labelled `[experimental]`. In `--status` output they're annotated in yellow. They're not auto-enabled by any preset.
 
-All five are stdlib-only Python, no pip install required (except Playwright for retina). They're installed to `~/.local/share/ccsetup/` by `install.sh`.
+All five are stdlib-only Python, no pip install required (except Playwright for retina). They're installed to `~/.local/share/ccsetup/` by `install.sh`. Current version: **v1.0.1**.
 
 ---
 

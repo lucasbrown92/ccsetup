@@ -5,9 +5,10 @@ claude-mind: persistent investigation reasoning board
 MCP server (stdlib only, stdio transport). Stores reasoning nodes in
 .claude/mind.json in the current working directory (the target project).
 
-7 tools (6 core + 1 cross-tool):
+11 tools (6 core + 1 cross-tool + 4 cognitive):
   mind_open, mind_add, mind_update, mind_query, mind_summary, mind_resolve
   mind_import_witness  — create a fact node from a claude-witness run
+  mind_recall, mind_sweep, mind_replay, mind_export_watch — cognitive extensions
 
 Usage:
   python server.py                          # run as MCP server
@@ -24,7 +25,7 @@ Add to your project's .mcp.json:
   }
 """
 
-VERSION = "0.0.1"
+VERSION = "1.0.1"
 
 import json
 import os
@@ -46,6 +47,8 @@ from schema import (
     filter_nodes,
     find_dependents,
     find_dependencies,
+    search_history,
+    compute_risk_score,
 )
 from store import load, save, find_node
 
@@ -149,7 +152,7 @@ TOOLS = [
                 "evidence_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Cross-tool evidence refs (e.g. witness:run:call or charter:entry_id)",
+                    "description": "Cross-tool evidence refs. Conventions: witness:<run_id>:<call_id>, charter:<entry_id>, retina:<capture_id>, mind:<investigation_id>:<node_id>",
                 },
                 "depends_on": {
                     "type": "array",
@@ -434,11 +437,16 @@ def tool_mind_summary(args):
 
     # NEVER truncate assumptions — these are the highest-risk items
     if assumptions:
+        now = datetime.now(timezone.utc)
+        assumption_risks = [(compute_risk_score(n, nodes, now), n) for n in assumptions]
+        assumption_risks.sort(key=lambda x: -x[0]["risk_score"])
         lines.append(f"\n⚠  ASSUMPTIONS — unverified risks ({len(assumptions)}):")
-        for n in assumptions:
-            deps = find_dependents(nodes, n["id"])
-            risk = f" ← {len(deps)} node(s) depend on this" if deps else ""
-            lines.append(f"  [{n['id']}] {n['content']}{risk}")
+        for risk_info, n in assumption_risks:
+            deps = risk_info["dependent_count"]
+            age = risk_info["age_hours"]
+            risk_label = " ← HIGH RISK" if risk_info["risk_score"] > 5.0 else ""
+            dep_str = f", {deps} deps" if deps else ""
+            lines.append(f"  [{n['id']}] {n['content']} ({age:.1f}h old{dep_str}){risk_label}")
 
     if hypotheses:
         lines.append(f"\nHYPOTHESES — open ({len(hypotheses)}):")
@@ -577,6 +585,242 @@ def tool_mind_graph(args):
     return _tool_result("\n".join(lines))
 
 
+# ── Cognitive tools ───────────────────────────────────────────────────────────
+
+def tool_mind_recall(args):
+    query = (args.get("query") or "").strip()
+    if not query:
+        return _tool_result("Error: query is required.", is_error=True)
+
+    limit = args.get("limit", 5)
+    node_types = args.get("node_types")
+
+    data = load()
+    results = search_history(data, query, limit=limit, node_types=node_types)
+
+    if not results:
+        history_count = len(data.get("history", []))
+        return _tool_result(
+            f"No matches for '{query}' in {history_count} archived investigation(s).\n"
+            "Try broader search terms or check mind_query for the active investigation."
+        )
+
+    lines = [f"RECALL: '{query}' — {len(results)} match(es)\n"]
+    for r in results:
+        inv = r["investigation"]
+        nodes = r["matching_nodes"]
+        resolved = inv.get("resolved_at", "")[:10] if inv.get("resolved_at") else "unresolved"
+        lines.append(f"━ {inv.get('title', '?')}  ({resolved})")
+        if inv.get("conclusion"):
+            lines.append(f"  conclusion: {inv['conclusion']}")
+        for n in nodes:
+            status_str = f" ({n['status']})" if n.get("status", "open") != "open" else ""
+            lines.append(f"  [{n['id']}] {n['type'].upper()}{status_str}: {n['content']}")
+        lines.append("")
+
+    return _tool_result("\n".join(lines).rstrip())
+
+
+def tool_mind_sweep(args):
+    data = load()
+    if not data.get("investigation") or data["investigation"]["status"] != "open":
+        return _tool_result("No active investigation. Call mind_open first.", is_error=True)
+
+    nodes = data["nodes"]
+    now = datetime.now(timezone.utc)
+
+    # Stale assumptions (>2h old, still open)
+    open_assumptions = [n for n in nodes if n["type"] == "assumption" and n["status"] == "open"]
+    risks = [compute_risk_score(n, nodes, now) for n in open_assumptions]
+    risks.sort(key=lambda r: -r["risk_score"])
+
+    stale = [r for r in risks if r["age_hours"] > 2.0]
+    high_risk = [r for r in risks if r["dependent_count"] >= 2]
+
+    # Overdue next_steps (>1h old, still open)
+    open_steps = [n for n in nodes if n["type"] == "next_step" and n["status"] == "open"]
+    overdue_steps = []
+    for n in open_steps:
+        created = n.get("created_at", "")
+        try:
+            created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            age_h = (now - created_dt).total_seconds() / 3600
+        except (ValueError, TypeError):
+            age_h = 0.0
+        if age_h > 1.0:
+            overdue_steps.append((age_h, n))
+    overdue_steps.sort(key=lambda x: -x[0])
+
+    lines = ["═══ MIND SWEEP ═══", ""]
+
+    if not stale and not high_risk and not overdue_steps:
+        lines.append("All clear — no stale assumptions, no high-risk nodes, no overdue steps.")
+        return _tool_result("\n".join(lines))
+
+    if stale:
+        lines.append(f"⚠  STALE ASSUMPTIONS — unverified >2h ({len(stale)}):")
+        for r in stale:
+            lines.append(
+                f"  [{r['node_id']}] {r['content']}"
+                f"  ({r['age_hours']:.1f}h old, {r['dependent_count']} deps, risk={r['risk_score']:.1f})"
+            )
+        lines.append("")
+
+    if high_risk:
+        lines.append(f"🔴 HIGH-RISK — ≥2 dependents ({len(high_risk)}):")
+        for r in high_risk:
+            lines.append(
+                f"  [{r['node_id']}] {r['content']}"
+                f"  ({r['dependent_count']} deps, {r['age_hours']:.1f}h old, risk={r['risk_score']:.1f})"
+            )
+        lines.append("")
+
+    if overdue_steps:
+        lines.append(f"OVERDUE NEXT STEPS — open >1h ({len(overdue_steps)}):")
+        for age_h, n in overdue_steps:
+            lines.append(f"  [{n['id']}] {n['content']}  ({age_h:.1f}h old)")
+        lines.append("")
+
+    return _tool_result("\n".join(lines).rstrip())
+
+
+def tool_mind_replay(args):
+    investigation_id = (args.get("investigation_id") or "").strip()
+
+    data = load()
+
+    if investigation_id:
+        # Search history for matching investigation
+        target = None
+        for entry in data.get("history", []):
+            inv = entry.get("investigation", {})
+            if inv.get("id", "").startswith(investigation_id) or investigation_id in inv.get("title", "").lower():
+                target = entry
+                break
+        if not target:
+            return _tool_result(f"No archived investigation matching '{investigation_id}'.", is_error=True)
+        inv = target["investigation"]
+        nodes = target.get("nodes", [])
+    else:
+        # Use current investigation
+        inv = data.get("investigation")
+        if not inv:
+            return _tool_result("No active investigation. Provide investigation_id for archived ones.", is_error=True)
+        nodes = data["nodes"]
+
+    if not nodes:
+        return _tool_result(f"Investigation '{inv.get('title', '?')}' has no nodes.")
+
+    # Sort by created_at
+    opened_at = inv.get("opened_at", "")
+    try:
+        base_dt = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        base_dt = None
+
+    sorted_nodes = sorted(nodes, key=lambda n: n.get("created_at", ""))
+
+    lines = [
+        f"═══ REPLAY: {inv.get('title', '?')} ═══",
+        f"Opened: {opened_at[:16] if opened_at else '?'}",
+        "",
+    ]
+
+    for n in sorted_nodes:
+        created = n.get("created_at", "")
+        # Compute relative time
+        if base_dt and created:
+            try:
+                node_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                delta_min = (node_dt - base_dt).total_seconds() / 60
+                t_str = f"T+{delta_min:.0f}m"
+            except (ValueError, TypeError):
+                t_str = "T+?m"
+        else:
+            t_str = "T+?m"
+
+        status_change = ""
+        if n.get("status", "open") != "open":
+            status_change = f" -> {n['status'].upper()}"
+
+        conf = f" ({n['confidence']:.0%})" if n.get("confidence") is not None else ""
+        lines.append(f"  {t_str:>8}  [{n['id']}] {n['type'].upper()}{conf} added: {n['content']}{status_change}")
+        if n.get("notes"):
+            lines.append(f"           notes: {n['notes'][:80]}")
+
+    if inv.get("conclusion"):
+        resolved = inv.get("resolved_at", "")
+        if base_dt and resolved:
+            try:
+                res_dt = datetime.fromisoformat(resolved.replace("Z", "+00:00"))
+                delta_min = (res_dt - base_dt).total_seconds() / 60
+                t_str = f"T+{delta_min:.0f}m"
+            except (ValueError, TypeError):
+                t_str = "T+?m"
+        else:
+            t_str = "T+?m"
+        lines.append(f"  {t_str:>8}  RESOLVED: {inv['conclusion']}")
+
+    return _tool_result("\n".join(lines))
+
+
+def tool_mind_export_watch(args):
+    assumption_ids = args.get("assumption_ids") or []
+
+    data = load()
+    if not data.get("investigation") or data["investigation"]["status"] != "open":
+        return _tool_result("No active investigation. Call mind_open first.", is_error=True)
+
+    import re as _re
+    nodes = data["nodes"]
+
+    # Select nodes to extract watches from
+    if assumption_ids:
+        targets = [n for n in nodes if n["id"] in assumption_ids]
+    else:
+        targets = [n for n in nodes if n["type"] in ("assumption", "hypothesis") and n["status"] == "open"]
+
+    if not targets:
+        return _tool_result("No open assumptions or hypotheses to generate watches from.")
+
+    watches = []
+    for n in targets:
+        text = f"{n.get('content', '')} {n.get('notes', '')}"
+        # Extract function-like identifiers
+        fn_calls = _re.findall(r'\b([a-z_]\w*)\(', text)
+        methods = _re.findall(r'\b([A-Z]\w+\.\w+)', text)
+        files = n.get("files", [])
+
+        functions = list(set(fn_calls + [m.split(".")[-1] for m in methods]))
+
+        if files or functions:
+            watches.append({
+                "files": files,
+                "functions": functions[:5],
+                "reason": f"[{n['id']}] {n['type']}: {n['content'][:60]}",
+            })
+
+    if not watches:
+        return _tool_result(
+            "No file paths or function names found in open assumptions/hypotheses.\n"
+            "Tip: add files= when creating nodes with mind_add to enable directed observation."
+        )
+
+    # Format as JSON for structured output
+    import json as _json
+    output = {"watches": watches}
+
+    lines = [
+        "═══ EXPORT WATCH LIST ═══",
+        f"{len(watches)} watch(es) from {len(targets)} node(s)\n",
+        "Use these to guide witness_traces() calls after the next test run:",
+        "",
+        _json.dumps(output, indent=2),
+    ]
+
+    return _tool_result("\n".join(lines))
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _format_resume_summary(data):
@@ -707,6 +951,83 @@ TOOLS_EXTRA = [
             "properties": {},
         },
     },
+    {
+        "name": "mind_recall",
+        "description": (
+            "Search archived investigations for similar past work. "
+            "Returns matching investigations with titles, conclusions, and relevant nodes. "
+            "Use this at the start of any investigation to check if a similar issue was solved before."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search terms to match against past investigations (titles, conclusions, node content)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results to return (default: 5).",
+                    "default": 5,
+                },
+                "node_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Filter to specific node types (e.g. ['hypothesis', 'fact']). Omit for all types.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "mind_sweep",
+        "description": (
+            "Risk detection for the current investigation. "
+            "Reports: STALE ASSUMPTIONS (>2h unverified), HIGH-RISK (many dependents), "
+            "OVERDUE NEXT_STEPS (>1h old, still open). "
+            "Use periodically during long investigations to catch forgotten risks."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "mind_replay",
+        "description": (
+            "Show how an investigation's reasoning progressed as a timeline. "
+            "Displays nodes in chronological order with relative timestamps from investigation start. "
+            "Use to understand the strategy that led to a conclusion — the playbook for similar future problems."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "investigation_id": {
+                    "type": "string",
+                    "description": "ID or title substring of an archived investigation. Omit for current investigation.",
+                },
+            },
+        },
+    },
+    {
+        "name": "mind_export_watch",
+        "description": (
+            "Generate a structured watch list from open assumptions and hypotheses. "
+            "Extracts file paths and function names from node content to guide which "
+            "witness_traces() calls to make after the next test run. "
+            "Closes the observe→reason→observe loop."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "assumption_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific node IDs to extract watches from. Omit for all open assumptions/hypotheses.",
+                },
+            },
+        },
+    },
 ]
 
 TOOLS_CROSS = [
@@ -748,6 +1069,10 @@ TOOL_HANDLERS = {
     "mind_resolve":         tool_mind_resolve,
     "mind_graph":           tool_mind_graph,
     "mind_import_witness":  tool_mind_import_witness,
+    "mind_recall":          tool_mind_recall,
+    "mind_sweep":           tool_mind_sweep,
+    "mind_replay":          tool_mind_replay,
+    "mind_export_watch":    tool_mind_export_watch,
 }
 
 
@@ -776,7 +1101,7 @@ def handle_message(msg):
         _respond(msg_id, {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "claude-mind", "version": "2.0.0"},
+            "serverInfo": {"name": "claude-mind", "version": VERSION},
         })
     elif method in ("initialized", "notifications/cancelled", "notifications/progress"):
         pass  # notifications — no response needed

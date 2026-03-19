@@ -1,5 +1,7 @@
 # claude-witness
 
+> **v1.0.1**
+
 Execution memory for Python, JS/TS, and Go projects — standalone MCP server + language plugins.
 
 Captures what actually ran: function calls, arguments, return values, exceptions, and line coverage. Queryable across sessions. The evidence channel that doesn't exist anywhere else in the Claude tool stack.
@@ -25,12 +27,13 @@ server.py (MCP)                query layer — never a firehose
 
 | Tool | Description |
 |------|-------------|
-| `witness_runs(limit?)` | List recent runs with pass/fail status |
+| `witness_runs(limit?)` | List recent runs with pass/fail status — first call in any debugging session |
+| `witness_hotspots(limit?, run_count?)` | Functions with the most exceptions across recent runs — call before `witness_traces` |
 | `witness_traces(fn_name, run_id?, status?)` | All calls to a function — args, return values, depth |
-| `witness_exception(exc_type, run_id?)` | Exception frames with local variable state |
+| `witness_exception(exc_type, run_id?)` | Exception frames with local variable state at crash site |
 | `witness_coverage_gaps(file)` | Lines in a file never executed across recent runs |
 | `witness_diff(run_a, run_b)` | Delta between two runs: tests, functions, exceptions |
-| `witness_check_charter(run_id?)` | Cross-check run against charter invariants/constraints |
+| `witness_check_charter(run_id?)` | Cross-check run against charter invariants/constraints — uses shared tokenizer |
 
 ## JS/TS Capture — Vitest
 

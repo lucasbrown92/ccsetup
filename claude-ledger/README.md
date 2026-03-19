@@ -1,5 +1,7 @@
 # claude-ledger
 
+> **v1.0.1**
+
 **Live capability map for Claude Code.** Converts the static `.claude/tool-ledger.md` into a live, queryable MCP server.
 
 Instead of reading a stale markdown file at session start, call `ledger_context()` to get real-time health + active investigation state + recommended next tools in one call. Call `ledger_query("task")` to get an opinionated routing recommendation for any task.
@@ -8,12 +10,18 @@ Instead of reading a stale markdown file at session start, call `ledger_context(
 
 | Tool | Params | Purpose |
 |------|--------|---------|
-| `ledger_query` | `task, healthy_only?` | "What tools should I use for: X?" → ordered recommendations |
-| `ledger_available` | `layer?, healthy_only?` | List all configured tools by layer with health status |
-| `ledger_health` | `tool?` | Real-time health check (rechecks binary/file existence now) |
-| `ledger_workflows` | `tag?` | Canonical workflow patterns (debug, visual, session, agent…) |
-| `ledger_catalog` | `mcp_key?, configured_only?` | Full tool signatures for one or all MCP servers |
 | `ledger_context` | *(none)* | Session-start briefing: health + active state + next steps |
+| `ledger_query` | `task, healthy_only?` | Opinionated tool routing for any task — ordered call sequence |
+| `ledger_mode` | `mode?` | Get or set token priority mode: `economy` \| `balanced` \| `performance` |
+| `ledger_available` | `layer?, healthy_only?` | List all configured tools by layer with health status |
+| `ledger_health` | `tool?` | Real-time health check (rechecks binary/file/hook existence now) |
+| `ledger_diagnose` | `tool?` | Full prerequisite diagnosis — root cause + fix steps for degraded tools |
+| `ledger_fix` | `tool` | Auto-apply fixable issues: missing hooks, env vars, Serena language drift |
+| `ledger_workflows` | `tag?` | Canonical workflow patterns (debug, visual, investigation, agent-spawn…) |
+| `ledger_catalog` | `mcp_key?, configured_only?` | Full tool signatures for one or all MCP servers |
+| `ledger_rules` | `section?` | Operational playbook: anti-patterns, mandatory gates, priority chains, token habits |
+| `ledger_preflight` | `change, files?, change_type?` | Pre-change synthesis across charter + mind + witness + retina → CLEAR/CAUTION/BLOCKED |
+| `ledger_correlate` | `query, scope?` | Unified cross-tool search — everything known about a topic across all cognitive tools |
 
 ## Session Start
 

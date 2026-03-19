@@ -16,7 +16,7 @@ Transport: stdio MCP (JSON-RPC 2.0).
 Optional deps: playwright (all browser tools), Pillow (retina_diff pixel mode).
 """
 
-VERSION = "0.0.1"
+VERSION = "1.0.1"
 
 import hashlib
 import json
@@ -668,7 +668,7 @@ def handle_request(req: dict) -> None:
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "claude-retina", "version": "1.0.0"},
+                "serverInfo": {"name": "claude-retina", "version": VERSION},
             },
         })
         return

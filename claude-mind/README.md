@@ -1,5 +1,7 @@
 # claude-mind
 
+> **v1.0.1**
+
 Persistent investigation reasoning board for Claude.
 
 ## What it is
@@ -28,9 +30,11 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-Restart Claude Code. The 7 `mind_*` tools will appear in the tool list.
+Restart Claude Code. The 11 `mind_*` tools will appear in the tool list.
 
 ## Tools
+
+### Core (6)
 
 | Tool | Description |
 |------|-------------|
@@ -38,25 +42,40 @@ Restart Claude Code. The 7 `mind_*` tools will appear in the tool list.
 | `mind_add(type, content, ...)` | Add a reasoning node |
 | `mind_update(node_id, status, notes?)` | Update a node's status |
 | `mind_query(filter)` | Query nodes by type, status, or text |
-| `mind_summary()` | ≤15-line recovery briefing |
+| `mind_summary()` | ≤15-line recovery briefing — risk-sorted assumptions with age + dependent count |
 | `mind_resolve(conclusion, node_ids?)` | Close investigation with conclusion |
+
+### Cross-tool (1)
+
+| Tool | Description |
+|------|-------------|
 | `mind_import_witness(fn_name, run_id?)` | Import witness trace as a FACT node |
+
+### Cognitive (4)
+
+| Tool | Description |
+|------|-------------|
+| `mind_recall(query, limit?, node_types?)` | Search archived investigations — have you seen this before? |
+| `mind_sweep()` | Risk detection: stale assumptions (>2h), high-risk nodes, overdue next steps |
+| `mind_replay(investigation_id?)` | Strategy timeline — how reasoning evolved in past investigations |
+| `mind_export_watch(assumption_ids?)` | Export a structured watch list to guide `witness_traces` calls |
 
 ### Cross-tool evidence references
 
-`mind_add` and `mind_import_witness` support structured evidence IDs:
+`mind_add` supports structured evidence IDs linking to other cognitive tools:
 
 ```python
-# Reference a specific witness call
-mind_add("fact", "process() raises ValueError when x=None",
-         evidence_ids=["witness:20260317_081903_cae3bf:c00001"])
-
-# Reference a charter entry
-mind_add("constraint", "this change is blocked by stdlib constraint",
-         evidence_ids=["charter:bbb00002"])
+# Witness call
+evidence_ids=["witness:<run_id>:<call_id>"]
+# Charter entry
+evidence_ids=["charter:<entry_id>"]
+# Retina capture
+evidence_ids=["retina:<capture_id>"]
+# Another mind node
+evidence_ids=["mind:<investigation_id>:<node_id>"]
 ```
 
-These are displayed with `[W]` (witness) and `[C]` (charter) labels in `mind_query` output.
+These are displayed with `[W]`, `[C]`, `[R]`, `[M]` labels in `mind_query` output.
 
 ### Node types
 
@@ -163,7 +182,7 @@ mind_summary()
 
 - **stdlib only** — no external deps; copy anywhere
 - **stdio MCP** — simplest transport, no HTTP server needed
-- **≤6 node types** — no ontology creep; stays useful
+- **≤6 core node types** — no ontology creep; stays useful
 - **One active investigation** — focused; old ones archive to history in `mind.json`
 - **`assumption` is a distinct type** from `hypothesis` — it's something you're
   already building on, not something you're testing. The highest-risk category.

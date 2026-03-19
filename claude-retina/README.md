@@ -1,5 +1,7 @@
 # claude-retina
 
+> **v1.0.1**
+
 **Visual browser automation for Claude Code.** Gives Claude eyes on the running UI.
 
 Claude can read HTML/CSS/JS source but cannot *see* what renders. claude-retina closes that gap: screenshot any URL, diff before/after, inspect accessibility trees, capture JS console errors, run click/type interaction sequences, and do visual regression testing against named baselines.
