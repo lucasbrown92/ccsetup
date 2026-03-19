@@ -24,6 +24,8 @@ Add to your project's .mcp.json:
   }
 """
 
+VERSION = "0.0.1"
+
 import json
 import os
 import sys

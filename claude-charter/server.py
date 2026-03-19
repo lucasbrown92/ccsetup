@@ -14,6 +14,8 @@ Storage: .claude/charter.json in the working directory (override: CLAUDE_CHARTER
 Transport: stdio MCP (JSON-RPC 2.0). No third-party dependencies — stdlib only.
 """
 
+VERSION = "0.0.1"
+
 import json
 import sys
 from datetime import datetime, timezone

@@ -20,6 +20,8 @@ Cross-tool: reads mind.json, charter.json, witness/*.json for context.
 Transport: stdio MCP (JSON-RPC 2.0). No third-party dependencies — stdlib only.
 """
 
+VERSION = "0.0.1"
+
 import json
 import sys
 from pathlib import Path

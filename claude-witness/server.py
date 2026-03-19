@@ -16,6 +16,8 @@ Charter: .claude/charter.json (override: CLAUDE_CHARTER_DIR).
 Transport: stdio MCP (JSON-RPC 2.0). stdlib only.
 """
 
+VERSION = "0.0.1"
+
 import json
 import os
 import re

@@ -16,6 +16,8 @@ Transport: stdio MCP (JSON-RPC 2.0).
 Optional deps: playwright (all browser tools), Pillow (retina_diff pixel mode).
 """
 
+VERSION = "0.0.1"
+
 import hashlib
 import json
 import sys
