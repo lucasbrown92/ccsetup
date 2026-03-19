@@ -9,7 +9,7 @@ Design philosophy: **Claude is the primary user.** Every tool is evaluated from 
 ## Install
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/lucasbrown92/ccsetup
 cd ccsetup
 bash install.sh
 ```
@@ -40,44 +40,96 @@ ccsetup . --continue               # launch Claude with --continue (passed throu
 
 ## Tool Layers
 
-Tools are presented in layer order. Each layer builds on the one below.
+### Layer 0 — Foundation *(always-on)*
 
-| Layer | Name | Tools | Notes |
-|-------|------|-------|-------|
-| 0 | Foundation | Serena (LSP), GrapeRoot (dgc) | Always-on |
-| 1 | Context | dual-graph, LEANN, Context7 | Smart retrieval |
-| 2 | Memory | claude-session-mcp, context-mode | Cross-session |
-| 3 | Safety | parry, plan-reviewer, TDD Guard | Manual config |
-| 4 | Observability | ccusage, cship, cclogviewer, claudio | Telemetry |
-| 5 | Orchestration | seu-claude, ContextKit, Switchboard | Scaling |
-| 6 | Workflow | CodeGraphContext, remote-approver | Utilities |
+| Tool | What it does | Repo |
+|------|-------------|------|
+| **Serena** | IDE-like semantic codebase navigation via LSP — symbol search, definition/usage tracing, structured edits | [oraios/serena](https://github.com/oraios/serena) |
+| **GrapeRoot** (`dgc`) | Precomputed dual graph of files, functions, imports, and calls. Pre-injects relevant context before Claude starts thinking | [kunal12203/Codex-CLI-Compact](https://github.com/kunal12203/Codex-CLI-Compact) |
 
 ---
 
-## Experimental Tools
+### Layer 1 — Context Intelligence
 
-Six bundled MCP servers are marked **experimental** — they're built and working but not yet broadly validated across diverse projects. Enable them with `--experimental`:
+| Tool | What it does | Repo |
+|------|-------------|------|
+| **dual-graph MCP** | Local context store with graph-aware retrieval and cross-session memory. `graph_continue` runs at session start and routes straight to relevant files | bundled with GrapeRoot |
+| **LEANN** | Local-first semantic code search — AST-aware chunking, no cloud keys, retrieves code by meaning not exact text | `uv tool install leann-core --with leann` |
+| **Context7** | Injects live, version-accurate library docs into context. Eliminates hallucinations from stale post-training API knowledge | [upstash/context7](https://github.com/upstash/context7) |
+| **Claude Context** | Semantic search via Zilliz Cloud vector DB — enterprise-scale retrieval for very large repos | `npx @zilliz/claude-context-mcp@latest` |
+| **claude-witness** ⚗️ | Runtime execution trace capture via `sys.settrace`. Queryable by function name, run, status, and cross-run diff | [bundled ↗](https://github.com/lucasbrown92/ccsetup/tree/main/claude-witness) |
 
-| Tool | What it does |
-|------|-------------|
-| `claude-mind` | Persistent investigation reasoning board — hypotheses, facts, ruled-out paths that survive context compaction |
-| `claude-charter` | Project constitution store — invariants, constraints, non-goals; `charter_check()` flags violations |
-| `claude-witness` | Runtime execution trace capture via `sys.settrace`; queryable from pytest runs |
-| `claude-afe` | Agentic Field Engine — cognitive compiler that turns a task description into a precise agent spec |
-| `claude-retina` | Visual browser automation via Playwright — screenshots, diffs, accessibility trees, visual regression |
-| `claude-ledger` | Live capability map — `ledger_context()` replaces static tool-ledger.md at session start |
+---
 
-All six are bundled in the repo and installed to `~/.local/share/ccsetup/` by `install.sh`. They have no external dependencies beyond Python 3.9+ stdlib (plus Playwright for retina).
+### Layer 2 — Memory & Continuity
+
+| Tool | What it does | Repo |
+|------|-------------|------|
+| **claude-session-mcp** | Lossless session clone, archive, restore, and cross-machine transfer | [chrisguillory/claude-session-mcp](https://github.com/chrisguillory/claude-session-mcp) |
+| **context-mode** | Virtualizes tool outputs — keeps raw data out of context window, indexes locally for on-demand search | `npx -y context-mode` |
+| **claude-mind** ⚗️ | Persistent investigation reasoning board — hypotheses, facts, ruled-out paths that survive context compaction | [bundled ↗](https://github.com/lucasbrown92/ccsetup/tree/main/claude-mind) |
+| **claude-charter** ⚗️ | Project constitution store — invariants, constraints, non-goals. `charter_check()` flags violations before changes | [bundled ↗](https://github.com/lucasbrown92/ccsetup/tree/main/claude-charter) |
+
+---
+
+### Layer 3 — Safety & Guardrails *(manual setup)*
+
+| Tool | What it does | Repo |
+|------|-------------|------|
+| **parry** | Prompt injection + data exfiltration scanner via PreToolUse hook. Blocks secret leakage from `~/.ssh`, `.env`, etc. | [anthropics/parry](https://github.com/anthropics/parry) |
+| **claude-plan-reviewer** | Intercepts Claude's plan and sends it to a rival model (GPT-4, Gemini) for critique before execution | [anthropics/claude-plan-reviewer](https://github.com/anthropics/claude-plan-reviewer) |
+| **TDD Guard** | Blocks file writes unless a failing test exists first. Hard-enforces Red-Green-Refactor | [anthropics/tdd-guard](https://github.com/anthropics/tdd-guard) |
+
+---
+
+### Layer 4 — Observability & Telemetry
+
+| Tool | What it does | Repo |
+|------|-------------|------|
+| **ccusage** | Terminal dashboard for token usage and costs. Parses `~/.claude/*.jsonl` locally, zero cloud exfiltration | [ryoppippi/ccusage](https://github.com/ryoppippi/ccusage) |
+| **claude-esp** | Streams Claude's hidden thinking blocks, tool calls, and subagent comms to a separate terminal in real time | [anthropics/claude-esp](https://github.com/anthropics/claude-esp) |
+| **cclogviewer** | Converts Claude Code session logs into interactive HTML with nested task views and full tool-call chain transparency | [brads3290/cclogviewer](https://github.com/brads3290/cclogviewer) |
+| **claudio** | Plays macOS system sounds on tool start/end — ambient awareness that a long task finished without watching the terminal | hooks only, no binary |
+| **cship** | Live Claude Code metrics in your shell prompt — cost, context %, model name. Integrates with Starship | [cship.dev](https://cship.dev) |
+| **claude-retina** ⚗️ | Visual browser automation via Playwright — screenshots, pixel diffs, accessibility trees, visual regression testing | [bundled ↗](https://github.com/lucasbrown92/ccsetup/tree/main/claude-retina) |
+
+---
+
+### Layer 5 — Orchestration & Scaling
+
+| Tool | What it does | Repo |
+|------|-------------|------|
+| **seu-claude** | Persistent memory + task tracking + sandboxed execution + multi-agent orchestration | `npm install -g seu-claude` |
+| **ContextKit** | ⚠️ Deprecated — generates CLAUDE.md scaffolding. Maintainers point to PlanKit instead | abandoned |
+| **Switchboard** | Aggregates multiple MCP servers behind a single entrypoint. Reduces tool-schema token overhead | `npx @george5562/switchboard` |
+| **claude-afe** ⚗️ | Cognitive compiler — turns a task description into a complete agent spec with function bundle + distortion guards | [bundled ↗](https://github.com/lucasbrown92/ccsetup/tree/main/claude-afe) |
+| **claude-ledger** ⚗️ | Live capability map — `ledger_context()` replaces static tool-ledger.md at session start with opinionated routing | [bundled ↗](https://github.com/lucasbrown92/ccsetup/tree/main/claude-ledger) |
+
+---
+
+### Layer 6 — Workflow Utilities
+
+| Tool | What it does | Repo |
+|------|-------------|------|
+| **CodeGraphContext** | Indexes code into a knowledge graph for explicit relationship queries — callers, callees, call chains | `pip install codegraphcontext` |
+| **claude-remote-approver** | Forwards tool approval prompts to your phone via ntfy.sh. Approve or deny commands remotely | [anthropics/claude-remote-approver](https://github.com/anthropics/claude-remote-approver) |
+| **Smart Fork** | Semantic search across past Claude Code session transcripts. Turns session history into a knowledge base | [recursive-vibe/smart-fork](https://github.com/recursive-vibe/smart-fork) |
+| **clui-cc** | Voice + TTS interface for Claude Code — speak prompts, hear responses | [lcoutodemos/clui-cc](https://github.com/lcoutodemos/clui-cc) |
+
+---
+
+## Experimental Tools ⚗️
+
+Six bundled MCP servers are marked experimental — built and working but not yet broadly validated across diverse projects. Enable with `--experimental`:
 
 ```bash
-# Enable all experimental tools on top of maximal:
-ccsetup . --preset maximal --experimental
-
-# Or just the experimental tools, interactively:
-ccsetup . --experimental
+ccsetup . --preset maximal --experimental   # everything
+ccsetup . --experimental                    # just the experimental tools, interactively
 ```
 
-In interactive mode, these tools still appear as opt-in prompts — labelled `[experimental]` so you know what you're picking.
+In interactive mode they appear as normal opt-in prompts, labelled `[experimental]`. In `--status` output they're annotated in yellow. They're not auto-enabled by any preset.
+
+All six are stdlib-only Python, no pip install required (except Playwright for retina). They're installed to `~/.local/share/ccsetup/` by `install.sh`.
 
 ---
 
@@ -97,20 +149,16 @@ Two config files are written to the **target repo** (not this one):
 
 `ccsetup.py` is a **single-file, stdlib-only Python script**. No pip install required — copy it anywhere and run it.
 
-The bundled MCP servers (`claude-mind`, `claude-charter`, etc.) are also stdlib-only Python. After `bash install.sh`, they live at `~/.local/share/ccsetup/<server>/server.py` and are referenced by absolute path in `.mcp.json`.
-
 ---
 
 ## Development
 
 ```bash
-# Run tests (requires pytest)
 pip install pytest
 python -m pytest tests/ -v
 
-# Run without installing
 python ccsetup.py . --dry-run
 python ccsetup.py . --status
 ```
 
-See `docs/tools-reference.md` for per-tool descriptions and selection heuristics.
+See `docs/tools-reference.md` for per-tool selection heuristics and architectural notes.
