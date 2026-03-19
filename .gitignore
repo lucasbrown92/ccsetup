@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Machine-specific / generated at runtime
+.mcp.json
+.dual-graph/
+.serena/
+memory/
+
+# Claude Code local settings (machine-specific paths and permissions)
+.claude/settings.json
+.claude/settings.local.json
+.claude/afe.json
+.claude/retina/
+.claude/tool-ledger.md
+
+# Research / internal spec documents
+deep-research-report.md
+gemini-research-report.md
+AFE_SPEC_v2.md
+*.zip
