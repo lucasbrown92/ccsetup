@@ -29,7 +29,7 @@ Reads .mcp.json and .claude/ state in CWD at runtime (never cached).
 Transport: stdio MCP (JSON-RPC 2.0). stdlib only.
 """
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 import json
 import sys
