@@ -111,13 +111,13 @@ ccsetup . --continue               # launch Claude with --continue (passed throu
 | **CodeGraphContext** | Indexes code into a knowledge graph for explicit relationship queries — callers, callees, call chains | `pip install codegraphcontext` |
 | **claude-remote-approver** | Forwards tool approval prompts to your phone via ntfy.sh. Approve or deny commands remotely | [anthropics/claude-remote-approver](https://github.com/anthropics/claude-remote-approver) |
 | **Smart Fork** | Semantic search across past Claude Code session transcripts. Turns session history into a knowledge base | [recursive-vibe/smart-fork](https://github.com/recursive-vibe/smart-fork) |
-| **clui-cc** | Voice + TTS interface for Claude Code — speak prompts, hear responses | [lcoutodemos/clui-cc](https://github.com/lcoutodemos/clui-cc) |
+| **clui-cc** | macOS Electron overlay (Option+Space) — visual approve/deny for tool calls, multi-tab session management, voice input via local Whisper | [lcoutodemos/clui-cc](https://github.com/lcoutodemos/clui-cc) |
 
 ---
 
 ## Experimental Tools ⚗️
 
-Six bundled MCP servers are marked experimental — built and working but not yet broadly validated across diverse projects. Enable with `--experimental`:
+Five bundled MCP servers are marked experimental — built and working but not yet broadly validated across diverse projects. Enable with `--experimental`:
 
 ```bash
 ccsetup . --preset maximal --experimental   # everything
@@ -126,13 +126,13 @@ ccsetup . --experimental                    # just the experimental tools, inter
 
 In interactive mode they appear as normal opt-in prompts, labelled `[experimental]`. In `--status` output they're annotated in yellow. They're not auto-enabled by any preset.
 
-All six are stdlib-only Python, no pip install required (except Playwright for retina). They're installed to `~/.local/share/ccsetup/` by `install.sh`.
+All five are stdlib-only Python, no pip install required (except Playwright for retina). They're installed to `~/.local/share/ccsetup/` by `install.sh`.
 
 ---
 
 ## What gets written
 
-Two config files are written to the **target repo** (not this one):
+Three files are written to the **target repo** (not this one):
 
 | File | Purpose |
 |------|---------|
@@ -152,10 +152,10 @@ Two config files are written to the **target repo** (not this one):
 
 ```bash
 pip install pytest
-python -m pytest tests/ -v
+python3 -m pytest tests/ -v
 
-python ccsetup.py . --dry-run
-python ccsetup.py . --status
+python3 ccsetup.py . --dry-run
+python3 ccsetup.py . --status
 ```
 
 See `docs/tools-reference.md` for per-tool selection heuristics and architectural notes.
