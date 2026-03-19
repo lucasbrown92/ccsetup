@@ -48,16 +48,6 @@ TOOL_CATALOG: dict[str, list[tuple[str, str, str]]] = {
         ("witness_check_charter", "run_id?",                      "Cross-checking execution against charter entries"),
         ("witness_hotspots",      "limit?, run_count?",           "Functions with most exceptions — prioritize debugging"),
     ],
-    "dual-graph": [
-        ("graph_continue",       "query",                        "Session start — always call first"),
-        ("graph_scan",           "project_root",                  "First-time project indexing"),
-        ("graph_read",           "file",                          "Reading recommended file or file::symbol"),
-        ("graph_retrieve",       "query, limit?",                 "Semantic search in graph"),
-        ("fallback_rg",          "pattern, glob?",                "When graph confidence < high"),
-        ("graph_register_edit",  "files, summary?",               "After editing files — update graph memory"),
-        ("graph_impact",         "file",                          "Understanding change blast radius"),
-        ("graph_neighbors",      "file, depth?",                  "Finding related/connected files"),
-    ],
     "leann-server": [
         ("leann_search",   "query, limit?",      "Semantic code search — find by meaning"),
         ("leann_index",    "directory?",           "Build/refresh the local search index"),
@@ -92,15 +82,6 @@ TOOL_CATALOG: dict[str, list[tuple[str, str, str]]] = {
         ("get_session_stats", "(none)",                                      "Running session cost dashboard"),
         ("log_usage",         "input_tokens, output_tokens, description?",   "Record usage for cost tracking"),
     ],
-    "claude-afe": [
-        ("afe_compile",    "task, regime?, template?, domain?, locus?, modality?",  "Before spawning Agent tool — compile cognitive posture from task"),
-        ("afe_templates",  "regime?, domain?, filter?",                              "Browse 11 templates (6 synthetic, 4 canonical, 1 orchestrator)"),
-        ("afe_inspect",    "id",                                                      "Full spec detail + system_prompt_fragment for Agent spawn"),
-        ("afe_validate",   "spec_id",                                                 "Check spec against charter constraints + coherence"),
-        ("afe_ecology",    "task, phases?",                                           "Multi-phase agent chain: explore→plan→implement→review"),
-        ("afe_context",    "include?",                                                "Pull mind/charter/witness context before compilation"),
-        ("afe_history",    "limit?, filter?",                                         "List past compiled specs"),
-    ],
     "claude-retina": [
         ("retina_capture",   "url, selector?, viewport?, scheme?, label?, wait_ms?",  "See what the running UI actually looks like"),
         ("retina_diff",      "capture_a, capture_b, threshold?",                       "Compare two screenshots pixel-by-pixel — find what changed"),
@@ -125,7 +106,6 @@ TOOL_CATALOG: dict[str, list[tuple[str, str, str]]] = {
 # Layer assignments for each mcp_key
 LAYER_MAP: dict[str, int] = {
     "serena": 0,
-    "dual-graph": 1,
     "leann-server": 1,
     "Claude Context": 1,
     "context7": 1,
@@ -140,7 +120,6 @@ LAYER_MAP: dict[str, int] = {
     "cship": 4,
     "claude-retina": 4,
     "seu-claude": 5,
-    "claude-afe": 5,
     "claude-ledger": 5,
     "codegraphcontext": 6,
 }

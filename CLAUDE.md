@@ -43,21 +43,19 @@ Tools are presented in layer order. Each layer builds on the one below.
 
 ```
 Layer 0  Foundation      Serena (LSP) + GrapeRoot (dgc)        always-on
-Layer 1  Context         dual-graph, LEANN/Context, Context7   smart retrieval
+Layer 1  Context         LEANN, Context7                       smart retrieval
 Layer 2  Memory          claude-session-mcp, context-mode      cross-session
 Layer 3  Safety          parry, plan-reviewer, TDD Guard       guardrails
 Layer 4  Observability   ccusage, claude-esp, cclogviewer      telemetry
-Layer 5  Orchestration   seu-claude, ContextKit, Switchboard   scaling
+Layer 5  Orchestration   seu-claude                            scaling
 Layer 6  Workflow        CodeGraphContext, remote-approver      utilities
 ```
 
 ## Key Design Decisions
 
-- **Layer 0 is always-on**: Serena → `.mcp.json` unconditionally; GrapeRoot launches at end via `dgc .`
+- **Layer 0 is always-on**: Serena → `.mcp.json` unconditionally; GrapeRoot launches at end via `dgc .`; `.dual-graph/` context store created as part of Layer 0
 - **LEANN over Claude Context by default**: local-first, no cloud deps, AST-aware
-- **Switchboard runs last** in Layer 5 — it rewrites `.mcp.json` (invasive); backup created first
 - **Layer 3 tools are manual-only**: parry, TDD Guard, plan-reviewer require hook config that is project-specific. ccsetup records their steps in `.claude/ccsetup-report.md`
-- **ContextKit is deprecated**: marked abandoned by its own maintainers — flagged in the script
 - **`--from-layer N`**: re-run only part of setup, e.g. after adding a new tool
 - **Scope modes**: `hybrid` (default) puts some tools at user scope, `repo` forces everything local
 

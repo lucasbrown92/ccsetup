@@ -43,7 +43,7 @@ RECOMMENDED NEXT:
   3. charter_summary()   → review project constraints
 
 MISSING (run ccsetup to add):
-  - claude-afe: before spawning agent tool — compile cognitive posture (Layer 5)
+  - claude-ledger: live capability map (run: ccsetup . --from-layer 5)
 ```
 
 ## Routing

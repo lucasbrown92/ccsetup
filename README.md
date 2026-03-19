@@ -53,7 +53,6 @@ ccsetup . --continue               # launch Claude with --continue (passed throu
 
 | Tool | What it does | Repo |
 |------|-------------|------|
-| **dual-graph MCP** | Local context store with graph-aware retrieval and cross-session memory. `graph_continue` runs at session start and routes straight to relevant files | bundled with GrapeRoot |
 | **LEANN** | Local-first semantic code search — AST-aware chunking, no cloud keys, retrieves code by meaning not exact text | `uv tool install leann-core --with leann` |
 | **Context7** | Injects live, version-accurate library docs into context. Eliminates hallucinations from stale post-training API knowledge | [upstash/context7](https://github.com/upstash/context7) |
 | **Claude Context** | Semantic search via Zilliz Cloud vector DB — enterprise-scale retrieval for very large repos | `npx @zilliz/claude-context-mcp@latest` |
@@ -111,7 +110,6 @@ ccsetup . --continue               # launch Claude with --continue (passed throu
 | **CodeGraphContext** | Indexes code into a knowledge graph for explicit relationship queries — callers, callees, call chains | `pip install codegraphcontext` |
 | **claude-remote-approver** | Forwards tool approval prompts to your phone via ntfy.sh. Approve or deny commands remotely | [anthropics/claude-remote-approver](https://github.com/anthropics/claude-remote-approver) |
 | **Smart Fork** | Semantic search across past Claude Code session transcripts. Turns session history into a knowledge base | [recursive-vibe/smart-fork](https://github.com/recursive-vibe/smart-fork) |
-| **clui-cc** | macOS Electron overlay (Option+Space) — visual approve/deny for tool calls, multi-tab session management, voice input via local Whisper | [lcoutodemos/clui-cc](https://github.com/lcoutodemos/clui-cc) |
 
 ---
 

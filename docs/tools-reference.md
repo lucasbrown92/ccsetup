@@ -292,32 +292,6 @@ Avoid stacking multiple memory systems unless you have a specific reason for eac
 
 ---
 
-### claude-afe
-**Layer:** 5 — Orchestration
-**What:** Cognitive compiler — takes a task description, consults mind/charter/witness context,
-and compiles a complete agent specification: function bundle (8 functions × M/F modality), animal
-workflow sequence, distortion guards, and a system prompt fragment ready to inject when spawning
-the Agent tool.
-
-**Why Claude wants it:** Without AFE, every agent spawn is an ad-hoc prompt. With it, Claude
-compiles the right cognitive posture from its own memory/norms/evidence before spawning. The spec
-is structurally guaranteed, not improvised. The ecology mode chains multiple agents across 4 phases
-(explore→plan→implement→review) with typed handoff artifacts.
-
-**Include when:** Complex multi-agent or multi-phase tasks. Before any autonomous Agent spawn on
-non-trivial work.
-
-**Skip when:** Task is simple and single-agent. AFE pays off on complex work; it's overhead on
-one-shot prompts.
-
-**Install:** Bundled — `bash install.sh` from the ccsetup source directory copies to
-`~/.local/share/ccsetup/claude-afe/`.
-
-**Tools:** `afe_compile`, `afe_templates`, `afe_inspect`, `afe_validate`, `afe_ecology`,
-`afe_context`, `afe_history`
-
----
-
 ### claude-ledger
 **Layer:** 5 — Orchestration
 **What:** Live, queryable capability surface. Converts the static `tool-ledger.md` into a live
@@ -380,30 +354,6 @@ creates `~/.config/cship.toml`.
 
 ---
 
-### clui-cc
-**Layer:** 6 — Workflow
-**What:** macOS-only Electron overlay app — floating pill window (Option+Space), multi-tab session
-management, visual approve/deny workflow for tool calls, voice input (local Whisper, no cloud),
-conversation history. Replaces terminal as the primary Claude Code interface.
-
-**Why Claude wants it:** Visual approval workflow makes autonomous operation safer — pending tool
-calls are visible and user can approve or deny from a readable UI rather than raw terminal prompts.
-Multi-tab management keeps long autonomous sessions organized.
-
-**Include when:** macOS 13+, you want a GUI-layer alternative to the raw terminal, and you prefer
-visual approval over `--dangerously-skip-permissions`.
-
-**Skip when:** Linux/Windows (macOS-only). Prefer terminal-native workflow. Find the floating
-overlay more overhead than it's worth.
-
-**Install:** Clone → `./install-app.command`. Requires Node.js 18+, Python 3.12, Whisper CLI.
-`manual_only=True` — ccsetup records steps, does not automate install.
-
-**Conflicts:** Replaces terminal session workflow. When used, you're in the Electron app, not
-the terminal.
-
----
-
 ## Selection Heuristics
 
 **Shortest sane rule set:**
@@ -414,9 +364,8 @@ the terminal.
 4. Add context-mode if tool-output bloat is killing session longevity
 5. Pick ONE continuity tool: claude-session-mcp, smart-fork, or seu-claude
 6. Add parry and/or TDD Guard when safety or process discipline outweighs speed
-7. Add Switchboard only after MCP sprawl is a real, measured problem
 
 **Preset equivalents:**
 - `--preset minimal` → Layer 0 only
 - `--preset recommended` → Layers 0–2 + ccusage + cship (good default for most projects)
-- `--preset maximal` → Everything except invasive/manual/deprecated tools (includes claude-afe, cship, clui-cc steps)
+- `--preset maximal` → Everything except manual-only tools (parry, remote-approver, clui-cc) and experimental tools

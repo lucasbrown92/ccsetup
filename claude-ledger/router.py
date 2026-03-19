@@ -72,20 +72,6 @@ ROUTE_INDEX: list[dict] = [
         "description": "Visual browser automation — screenshots, diffs, accessibility, interactions",
     },
     {
-        "mcp_key": "claude-afe",
-        "keywords": [
-            "agent", "spawn", "compile", "spec", "orchestrate", "multi-agent",
-            "complex", "task", "cognitive", "posture", "ecology",
-        ],
-        "intent_phrases": [
-            "spawn an agent", "compile spec", "multi-agent", "agent ecology",
-            "complex task", "before spawning",
-        ],
-        "anti_keywords": [],
-        "weight": 1.0,
-        "description": "Cognitive compiler — task → agent spec before spawning Agent tool",
-    },
-    {
         "mcp_key": "serena",
         "keywords": [
             "symbol", "function", "class", "navigate", "find", "usage",
@@ -99,20 +85,6 @@ ROUTE_INDEX: list[dict] = [
         "anti_keywords": [],
         "weight": 1.0,
         "description": "Semantic codebase navigation — symbols, callers, definitions",
-    },
-    {
-        "mcp_key": "dual-graph",
-        "keywords": [
-            "context", "files", "explore", "codebase", "navigate",
-            "session start", "relevant", "related", "graph",
-        ],
-        "intent_phrases": [
-            "session start", "explore the codebase", "what files are relevant",
-            "find related files", "understand the project",
-        ],
-        "anti_keywords": [],
-        "weight": 0.9,
-        "description": "Graph-aware context retrieval — recommended files, session memory",
     },
     {
         "mcp_key": "leann-server",

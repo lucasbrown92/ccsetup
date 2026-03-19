@@ -235,7 +235,7 @@ class TestMcpPathCorrectness:
         servers = mcp_servers(tmp_project)
         share = str(Path.home() / ".local" / "share" / "ccsetup")
 
-        for srv_name in ["claude-mind", "claude-charter", "claude-witness", "claude-afe",
+        for srv_name in ["claude-mind", "claude-charter", "claude-witness",
                          "claude-retina", "claude-ledger"]:
             if srv_name not in servers:
                 continue
@@ -255,7 +255,7 @@ class TestMcpPathCorrectness:
         run_ccsetup(str(tmp_project), "--preset", "maximal", "--no-launch")
         servers = mcp_servers(tmp_project)
 
-        for srv_name in ["claude-mind", "claude-charter", "claude-witness", "claude-afe",
+        for srv_name in ["claude-mind", "claude-charter", "claude-witness",
                          "claude-retina", "claude-ledger"]:
             if srv_name not in servers:
                 continue
@@ -379,10 +379,10 @@ class TestToolsConsistency:
                 f"Preset tool '{tid}' not found in TOOL_BY_ID"
 
     def test_new_tools_in_maximal(self, ccsetup_module):
-        """cship and clui-cc must be in maximal; experimental tools must not be."""
+        """cship must be in maximal; clui-cc and experimental tools must not be."""
         maximal = ccsetup_module.PRESETS["maximal"]
-        for tid in ["cship", "clui-cc"]:
-            assert tid in maximal, f"{tid} missing from maximal preset"
+        assert "cship" in maximal, "cship missing from maximal preset"
+        assert "clui-cc" not in maximal, "clui-cc must not be in maximal (manual-only)"
         for tid in ccsetup_module.EXPERIMENTAL_TOOLS:
             assert tid not in maximal, \
                 f"{tid} is experimental and must not be in maximal (use --experimental)"

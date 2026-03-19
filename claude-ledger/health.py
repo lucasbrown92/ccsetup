@@ -47,7 +47,7 @@ _BINARY_MAP: dict[str, str] = {
 }
 
 # Bundled servers (checked by file existence, not PATH binary)
-_BUNDLED = {"claude-mind", "claude-charter", "claude-witness", "claude-afe",
+_BUNDLED = {"claude-mind", "claude-charter", "claude-witness",
             "claude-retina", "claude-ledger"}
 
 _SHARE_DIR = Path.home() / ".local" / "share" / "ccsetup"

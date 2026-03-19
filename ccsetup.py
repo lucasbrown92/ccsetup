@@ -22,7 +22,7 @@ Usage:
 
 Tool Layers:
   0  Foundation      Serena (LSP) + GrapeRoot (dgc)              always-on
-  1  Context         dual-graph, LEANN, Context7, claude-witness  smart retrieval
+  1  Context         LEANN, Context7, claude-witness              smart retrieval
   2  Memory          claude-mind, claude-charter, claude-session cross-session
   3  Safety          parry, claude-plan-reviewer, TDD Guard      guardrails
   4  Observability   ccusage, claude-esp, cclogviewer, claudio   telemetry
@@ -151,14 +151,13 @@ PRESETS: dict[str, set[str]] = {
     },
     "maximal": {
         "serena", "graperoot",
-        "dual-graph", "leann", "context7",
+        "leann", "context7",
         "claude-session", "context-mode",
         "ccusage", "cclogviewer", "claudio", "cship",
         "seu-claude", "codegraphcontext", "smart-fork",
-        "clui-cc",
         # Deliberately excluded from maximal: parry/tdd-guard/plan-reviewer (manual only),
         # claude-context (cloud deps), claude-esp (manual), remote-approver (manual),
-        # experimental tools (mind/charter/witness/retina/ledger — use --experimental)
+        # clui-cc (manual-only macOS app), experimental tools (mind/charter/witness/retina/ledger)
     },
 }
 
@@ -188,13 +187,6 @@ TOOLS: list[ToolDef] = [
         skip_when="Never. Launched via 'dgc .' at end of setup.",
         always_on=True, presets=["minimal","recommended","maximal"],
         binary="dgc"),
-
-    ToolDef("dual-graph", "dual-graph MCP", 1, "Context Intelligence",
-        tagline="Local context store with graph-aware retrieval and session memory",
-        description="Precomputes a dual graph (files + symbols) and gives me structured graph queries. Also maintains a persistent context store across sessions.",
-        why_i_want_it="This is my primary index for this repo. graph_continue runs at session start and routes me straight to the relevant files without any manual searching.",
-        skip_when="Project has fewer than 5 files, or the codebase is too dynamic for a static graph.",
-        presets=["recommended","maximal"], binary="", mcp_key=""),
 
     ToolDef("leann", "LEANN", 1, "Context Intelligence",
         tagline="Local-first semantic code search — no cloud, no keys",
@@ -355,13 +347,6 @@ TOOLS: list[ToolDef] = [
         skip_when="ccusage already covers your cost monitoring needs. cship is complementary but redundant if you're watching ccusage constantly.",
         presets=["recommended", "maximal"], binary="cship"),
 
-    # clui-cc (Layer 6 — Workflow)
-    ToolDef("clui-cc", "clui-cc", 6, "Workflow",
-        tagline="macOS floating overlay — visual session management + approval UI for Claude",
-        description="Electron app (macOS 13+ only) that wraps Claude Code in a floating pill window. Multi-tab session management, visual approve/deny for tool calls, voice input (local Whisper, no cloud), conversation history. Replaces terminal as the primary Claude interface.",
-        why_i_want_it="The visual approval workflow makes autonomous operation safer — I can see what's queued and the user can approve or deny from a readable UI rather than raw terminal prompts. Sessions are manageable, not just scrolling text.",
-        skip_when="Linux/Windows (macOS-only). Prefer terminal-native workflow. Or you find the floating overlay more overhead than it's worth.",
-        manual_only=True, presets=["maximal"], binary=""),
 ]
 
 TOOL_BY_ID: dict[str, ToolDef] = {t.id: t for t in TOOLS}
@@ -470,6 +455,30 @@ def run(
     if check and result.returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, cmd)
     return result
+
+
+def _run_install(cmd: list[str], cwd: Path | None = None) -> tuple[bool, str]:
+    """Run an install command; captures output and returns (success, error_detail).
+    Use instead of run() for installs so failures surface in GUI mode too."""
+    print(f"  {DIM}+ {' '.join(cmd)}{RESET}")
+    if _DRY_RUN:
+        return True, ""
+    merged = os.environ.copy()
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            cwd=str(cwd) if cwd else None, env=merged)
+    if result.returncode == 0:
+        return True, ""
+    combined = ((result.stderr or "") + "\n" + (result.stdout or "")).strip()
+    lower = combined.lower()
+    if any(k in lower for k in ["eacces", "permission denied", "eperm", "access denied"]):
+        return False, (
+            "Permission denied. If using system npm/pip, try one of:\n"
+            "    • Use nvm (https://github.com/nvm-sh/nvm) to manage Node.js without sudo\n"
+            "    • Or: sudo " + " ".join(cmd)
+        )
+    if any(k in lower for k in ["not found", "no matching distribution", "404", "not exist"]):
+        return False, f"Package not found or unavailable. Details: {combined[:200]}"
+    return False, combined[:400] if combined else "Install returned non-zero exit code."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -821,6 +830,16 @@ def layer0_foundation(project_root: Path) -> None:
         record(SetupResult("graperoot", "GrapeRoot", 0, ToolHealth.MISSING_BINARY,
                            manual_steps=["Install dgc: https://github.com/kunal12203/Codex-CLI-Compact"]))
 
+    # Ensure .dual-graph/ context store exists (part of GrapeRoot workflow)
+    dg_dir = project_root / ".dual-graph"
+    if not dg_dir.exists():
+        dg_dir.mkdir(exist_ok=True)
+        ctx = dg_dir / "context-store.json"
+        if not ctx.exists():
+            save_json(ctx, [], backup=False)
+        ok(".dual-graph/ created")
+        info("Open Claude Code and run 'graph_scan .' to index this repo")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LAYER 1 — Context Intelligence
@@ -830,31 +849,6 @@ def layer1_context(project_root: Path) -> None:
     section(1, "Context Intelligence")
     dim("Smart retrieval: Claude finds relevant code by meaning, not exhaustive reads.")
     print()
-
-    # dual-graph
-    dg_dir = project_root / ".dual-graph"
-    if dg_dir.exists():
-        ok("dual-graph index directory present")
-        record(SetupResult("dual-graph", "dual-graph MCP", 1, ToolHealth.HEALTHY,
-                           notes=["Run graph_scan in Claude Code to build/refresh the index."]))
-    elif ask_yes_no(
-        "Initialize dual-graph context store for this repo?\n"
-        "    (dual-graph MCP must be installed globally; creates .dual-graph/)",
-        default=True, tool_id="dual-graph",
-    ):
-        dg_dir.mkdir(exist_ok=True)
-        ctx = dg_dir / "context-store.json"
-        if not ctx.exists():
-            save_json(ctx, [], backup=False)
-        ok(".dual-graph/ created")
-        info("Open Claude Code and run 'graph_scan .' to index this repo")
-        record(SetupResult("dual-graph", "dual-graph MCP", 1, ToolHealth.MANUAL_REQUIRED,
-                           manual_steps=["Run 'graph_scan .' inside Claude Code to build the index.",
-                                         "Add dual-graph policy block to CLAUDE.md."]))
-    else:
-        record(SetupResult("dual-graph", "dual-graph MCP", 1, ToolHealth.SKIPPED))
-
-    hr()
 
     # Semantic search: LEANN vs Claude Context (mutually exclusive)
     if has_mcp_server(project_root, "leann-server"):
@@ -937,10 +931,11 @@ def _setup_leann(project_root: Path) -> None:
         return
     if not which("leann_mcp"):
         info("Installing LEANN…")
-        try:
-            run(["uv", "tool", "install", "leann-core", "--with", "leann"])
-        except subprocess.CalledProcessError:
+        ok, detail = _run_install(["uv", "tool", "install", "leann-core", "--with", "leann"])
+        if not ok:
             err("LEANN install failed.")
+            if detail:
+                info(detail)
             record(SetupResult("leann", "LEANN", 1, ToolHealth.MISSING_BINARY,
                                manual_steps=["uv tool install leann-core --with leann"]))
             return
@@ -1398,13 +1393,15 @@ def layer5_orchestration(project_root: Path) -> None:
             record(SetupResult("seu-claude", "seu-claude", 5, ToolHealth.MISSING_BINARY,
                                manual_steps=["Install Node.js, then: npm install -g seu-claude"]))
         else:
-            try:
-                run(["npm", "install", "-g", "seu-claude"])
+            ok, detail = _run_install(["npm", "install", "-g", "seu-claude"])
+            if ok:
                 set_mcp_server(project_root, "seu-claude", mcp_seu_claude())
                 record(SetupResult("seu-claude", "seu-claude", 5, ToolHealth.HEALTHY,
                                    notes=["Provides persistent tasks, AST analysis, sandbox execution."]))
-            except subprocess.CalledProcessError:
+            else:
                 err("Install failed.")
+                if detail:
+                    info(detail)
                 record(SetupResult("seu-claude", "seu-claude", 5, ToolHealth.MISSING_BINARY,
                                    manual_steps=["npm install -g seu-claude"]))
     else:
@@ -1433,10 +1430,12 @@ def layer6_workflow(project_root: Path) -> None:
     ):
         if not which("cgc"):
             info("Installing CodeGraphContext via pip…")
-            try:
-                run([sys.executable, "-m", "pip", "install", "--user", "codegraphcontext"])
-            except subprocess.CalledProcessError:
+            ok, detail = _run_install(
+                [sys.executable, "-m", "pip", "install", "--user", "codegraphcontext"])
+            if not ok:
                 err("Install failed.")
+                if detail:
+                    info(detail)
                 record(SetupResult("codegraphcontext", "CodeGraphContext", 6,
                                    ToolHealth.MISSING_BINARY,
                                    manual_steps=["pip install --user codegraphcontext",
@@ -1509,33 +1508,6 @@ def layer6_workflow(project_root: Path) -> None:
     else:
         record(SetupResult("smart-fork", "Smart Fork Detection", 6, ToolHealth.SKIPPED))
 
-    hr()
-
-    # clui-cc
-    import platform as _platform
-    if ask_yes_no(
-        "Note manual steps for clui-cc? (macOS floating overlay — visual session management + approval UI)\n"
-        "    Electron app: Option+Space toggles a pill window with tabs, approve/deny tool calls, voice input.\n"
-        "    ⚠  macOS 13+ only. Requires Node.js 18+, Python 3.12, Whisper CLI.",
-        default=False, tool_id="clui-cc",
-    ):
-        if _platform.system() != "Darwin":
-            warn("clui-cc is macOS-only. Skipping on this platform.")
-            record(SetupResult("clui-cc", "clui-cc", 6, ToolHealth.MISSING_BINARY,
-                               manual_steps=["clui-cc requires macOS 13+"]))
-        else:
-            record(SetupResult("clui-cc", "clui-cc", 6, ToolHealth.MANUAL_REQUIRED,
-                               manual_steps=[
-                                   "Install prerequisites: Node.js 18+ (https://nodejs.org), Python 3.12, Whisper CLI",
-                                   "Clone: git clone https://github.com/lcoutodemos/clui-cc",
-                                   "Install: cd clui-cc && ./install-app.command",
-                                   "Launch: ./commands/start.command",
-                                   "Toggle overlay: Option+Space",
-                                   "NOTE: Replaces terminal session workflow. Claude runs inside the Electron app.",
-                               ]))
-            info("Manual steps recorded in ccsetup report.")
-    else:
-        record(SetupResult("clui-cc", "clui-cc", 6, ToolHealth.SKIPPED))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1789,16 +1761,6 @@ _TOOL_CATALOG: dict[str, list[tuple[str, str, str]]] = {
         ("witness_check_charter","run_id?",                        "Cross-checking execution against charter entries"),
         ("witness_hotspots",     "limit?, run_count?",             "Functions with most exceptions — prioritize debugging"),
     ],
-    "dual-graph": [
-        ("graph_continue",       "query",                         "Session start — always call first"),
-        ("graph_scan",           "project_root",                   "First-time project indexing"),
-        ("graph_read",           "file",                           "Reading recommended file or file::symbol"),
-        ("graph_retrieve",       "query, limit?",                  "Semantic search in graph"),
-        ("fallback_rg",          "pattern, glob?",                 "When graph confidence < high"),
-        ("graph_register_edit",  "files, summary?",                "After editing files — update graph memory"),
-        ("graph_impact",         "file",                           "Understanding change blast radius"),
-        ("graph_neighbors",      "file, depth?",                   "Finding related/connected files"),
-    ],
     "leann-server": [
         ("leann_search",   "query, limit?",                       "Semantic code search — find by meaning"),
         ("leann_index",    "directory?",                           "Build/refresh the local search index"),
@@ -2020,7 +1982,7 @@ def generate_tool_ledger(project_root: Path) -> None:
         (".claude/witness/",        "claude-witness",  "Execution trace files (one per run)"),
         (".mcp.json",               "(config)",        "MCP server configuration"),
         (".claude/settings.local.json", "(config)",    "Hooks and local settings"),
-        (".dual-graph/",            "dual-graph",      "Graph index and context store"),
+        (".dual-graph/",            "graperoot",       "Graph index and context store"),
         ("CLAUDE.md",               "(directives)",    "Project instructions for Claude"),
     ]
     for fpath, tool, desc in state_files:
