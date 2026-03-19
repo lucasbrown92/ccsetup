@@ -15,7 +15,7 @@ import pytest
 
 CCSETUP = Path(__file__).parent.parent / "ccsetup.py"
 SHARE_DIR = Path.home() / ".local" / "share" / "ccsetup"
-BUNDLED_SERVERS = ["claude-mind", "claude-charter", "claude-witness", "claude-afe",
+BUNDLED_SERVERS = ["claude-mind", "claude-charter", "claude-witness",
                    "claude-retina", "claude-ledger"]
 _bundled_installed = all(
     (SHARE_DIR / srv / "server.py").exists() for srv in BUNDLED_SERVERS
@@ -106,7 +106,6 @@ class TestPresetMinimal:
         servers = mcp_servers(tmp_project)
         assert "leann-server" not in servers, "minimal should not include leann"
         assert "claude-mind" not in servers, "minimal should not include claude-mind"
-        assert "claude-afe" not in servers, "minimal should not include claude-afe"
 
     def test_preset_minimal_status_exits_zero(self, tmp_project):
         run_ccsetup(str(tmp_project), "--preset", "minimal", "--no-launch")
@@ -171,7 +170,7 @@ class TestPresetMaximal:
         run_ccsetup(str(tmp_project), "--preset", "maximal", "--no-launch")
         servers = mcp_servers(tmp_project)
         for tid in ["claude-mind", "claude-charter", "claude-witness",
-                    "claude-afe", "claude-retina", "claude-ledger"]:
+                    "claude-retina", "claude-ledger"]:
             assert tid not in servers, \
                 f"{tid} should not be in maximal — it is experimental (use --experimental)"
 
@@ -180,7 +179,7 @@ class TestPresetMaximal:
         run_ccsetup(str(tmp_project), "--preset", "maximal", "--experimental", "--no-launch")
         servers = mcp_servers(tmp_project)
         for tid in ["claude-mind", "claude-charter", "claude-witness",
-                    "claude-afe", "claude-retina", "claude-ledger"]:
+                    "claude-retina", "claude-ledger"]:
             assert tid in servers, \
                 f"{tid} missing from maximal+experimental servers: {list(servers)}"
 
@@ -303,19 +302,10 @@ class TestToolLedger:
         assert "serena" in content.lower()
 
     @pytest.mark.skipif(not _bundled_installed, reason="bundled servers not installed")
-    def test_tool_ledger_has_afe_section(self, tmp_project):
-        run_ccsetup(str(tmp_project), "--preset", "maximal", "--experimental", "--no-launch")
-        content = (tmp_project / ".claude" / "tool-ledger.md").read_text()
-        assert "claude-afe" in content.lower(), \
-            "tool-ledger.md missing claude-afe section after maximal+experimental run"
-        assert "afe_compile" in content, \
-            "tool-ledger.md missing afe_compile tool entry"
-
-    @pytest.mark.skipif(not _bundled_installed, reason="bundled servers not installed")
     def test_tool_ledger_has_all_bundled_servers(self, tmp_project):
         run_ccsetup(str(tmp_project), "--preset", "maximal", "--experimental", "--no-launch")
         content = (tmp_project / ".claude" / "tool-ledger.md").read_text()
-        for srv in ["claude-mind", "claude-charter", "claude-witness", "claude-afe",
+        for srv in ["claude-mind", "claude-charter", "claude-witness",
                     "claude-retina", "claude-ledger"]:
             assert srv in content, f"tool-ledger.md missing {srv} section"
 
@@ -359,20 +349,6 @@ class TestServerSmoke:
         assert result.returncode == 0, \
             f"{server_name}/server.py has syntax error: {result.stderr}"
 
-    def test_afe_tool_catalog_has_seven_tools(self):
-        """_TOOL_CATALOG['claude-afe'] must have exactly 7 entries."""
-        import importlib.util, sys as _sys
-        mod_name = "ccsetup_smoke"
-        spec = importlib.util.spec_from_file_location(mod_name, CCSETUP)
-        mod = importlib.util.module_from_spec(spec)
-        _sys.modules[mod_name] = mod
-        try:
-            spec.loader.exec_module(mod)
-            catalog = mod._TOOL_CATALOG.get("claude-afe", [])
-            assert len(catalog) == 7, \
-                f"claude-afe catalog has {len(catalog)} tools, expected 7: {catalog}"
-        finally:
-            _sys.modules.pop(mod_name, None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -411,10 +387,10 @@ class TestToolsConsistency:
             assert tid not in maximal, \
                 f"{tid} is experimental and must not be in maximal (use --experimental)"
 
-    def test_experimental_tools_set_has_six(self, ccsetup_module):
-        """EXPERIMENTAL_TOOLS must contain exactly 6 bundled servers."""
+    def test_experimental_tools_set_has_five(self, ccsetup_module):
+        """EXPERIMENTAL_TOOLS must contain exactly 5 bundled servers."""
         expected = {"claude-mind", "claude-charter", "claude-witness",
-                    "claude-afe", "claude-retina", "claude-ledger"}
+                    "claude-retina", "claude-ledger"}
         assert ccsetup_module.EXPERIMENTAL_TOOLS == expected, \
             f"EXPERIMENTAL_TOOLS mismatch: {ccsetup_module.EXPERIMENTAL_TOOLS}"
 
@@ -428,12 +404,6 @@ class TestToolsConsistency:
             assert td.name,       f"ToolDef missing name: {td.id}"
             assert td.tagline,    f"ToolDef missing tagline: {td.id}"
             assert td.layer >= 0, f"ToolDef bad layer: {td.id}"
-
-    def test_workflows_has_afe_section(self, ccsetup_module):
-        assert "afe_compile" in ccsetup_module._WORKFLOWS, \
-            "AFE workflow section missing from _WORKFLOWS"
-        assert "afe_ecology" in ccsetup_module._WORKFLOWS, \
-            "AFE ecology workflow missing from _WORKFLOWS"
 
     def test_claude_retina_is_experimental(self, ccsetup_module):
         assert "claude-retina" in ccsetup_module.EXPERIMENTAL_TOOLS, \

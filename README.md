@@ -102,7 +102,6 @@ ccsetup . --continue               # launch Claude with --continue (passed throu
 | **seu-claude** | Persistent memory + task tracking + sandboxed execution + multi-agent orchestration | `npm install -g seu-claude` |
 | **ContextKit** | ⚠️ Deprecated — generates CLAUDE.md scaffolding. Maintainers point to PlanKit instead | abandoned |
 | **Switchboard** | Aggregates multiple MCP servers behind a single entrypoint. Reduces tool-schema token overhead | `npx @george5562/switchboard` |
-| **claude-afe** ⚗️ | Cognitive compiler — turns a task description into a complete agent spec with function bundle + distortion guards | [bundled ↗](https://github.com/lucasbrown92/ccsetup/tree/main/claude-afe) |
 | **claude-ledger** ⚗️ | Live capability map — `ledger_context()` replaces static tool-ledger.md at session start with opinionated routing | [bundled ↗](https://github.com/lucasbrown92/ccsetup/tree/main/claude-ledger) |
 
 ---

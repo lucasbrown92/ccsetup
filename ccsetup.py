@@ -167,7 +167,7 @@ PRESETS: dict[str, set[str]] = {
 # Tools marked experimental — opt-in only, enabled via --experimental flag
 EXPERIMENTAL_TOOLS: set[str] = {
     "claude-mind", "claude-charter", "claude-witness",
-    "claude-afe", "claude-retina", "claude-ledger",
+    "claude-retina", "claude-ledger",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -354,14 +354,6 @@ TOOLS: list[ToolDef] = [
         why_i_want_it="When resuming a project after a break, I can find the exact prior session where we discussed this problem instead of starting from scratch.",
         skip_when="claude-session-mcp or seu-claude already cover your continuity needs. Don't stack memory systems.",
         presets=["maximal"], binary=""),
-
-    # claude-afe (Layer 5 — Orchestration)
-    ToolDef("claude-afe", "claude-afe", 5, "Orchestration",
-        tagline="Cognitive compiler — task → precisely-tuned agent spec",
-        description="Takes a task description, consults mind/charter/witness context, and compiles a complete agent specification: function bundle (8 functions × M/F modality), animal workflow sequence, distortion guards, and a system prompt fragment ready to inject when spawning the Agent tool.",
-        why_i_want_it="Without AFE, every agent spawn is an ad-hoc prompt. With it, I compile the right cognitive posture from my own memory/norms/evidence before I spawn. The spec is structurally guaranteed, not improvised.",
-        skip_when="Task is simple and single-agent. AFE pays off on complex multi-phase or multi-agent work.",
-        experimental=True, presets=[], mcp_key="claude-afe"),
 
     # claude-ledger (Layer 5 — Orchestration)
     ToolDef("claude-ledger", "claude-ledger", 5, "Orchestration",
@@ -755,9 +747,6 @@ def mcp_claude_charter() -> dict[str, Any]:
 def mcp_claude_witness() -> dict[str, Any]:
     return _mcp("python3", str(_ccsetup_share() / "claude-witness" / "server.py"))
 
-def mcp_claude_afe() -> dict[str, Any]:
-    return _mcp("python3", str(_ccsetup_share() / "claude-afe" / "server.py"))
-
 def mcp_claude_retina() -> dict[str, Any]:
     return _mcp("python3", str(_ccsetup_share() / "claude-retina" / "server.py"))
 
@@ -1002,21 +991,6 @@ def _setup_claude_witness(project_root: Path) -> None:
     record(SetupResult("claude-witness", "claude-witness", 1, h,
                        notes=["Add --witness to pytest runs to capture execution evidence.",
                               "See claude-witness/README.md for conftest.py setup."]))
-
-
-def _setup_claude_afe(project_root: Path) -> None:
-    if not _ccsetup_server_installed("claude-afe"):
-        err("claude-afe not found. Run 'bash install.sh' from the ccsetup repo to install it.")
-        record(SetupResult("claude-afe", "claude-afe", 5, ToolHealth.NOT_CONFIGURED,
-                           manual_steps=["Run 'bash install.sh' from the ccsetup source directory.",
-                                         "Then re-run ccsetup."]))
-        return
-    set_mcp_server(project_root, "claude-afe", mcp_claude_afe())
-    h = health_ccsetup_server("claude-afe")
-    record(SetupResult("claude-afe", "claude-afe", 5, h,
-                       notes=["Use afe_context() to read mind/charter/witness state.",
-                              "Use afe_compile(task) to compile agent spec before spawning Agent tool.",
-                              "Use afe_ecology(task) for multi-phase agent chains."]))
 
 
 def _setup_claude_retina(project_root: Path) -> None:
@@ -1407,21 +1381,6 @@ def layer5_orchestration(project_root: Path) -> None:
     dim("Multi-agent coordination, spec-driven development, tool-surface compression.")
     print()
 
-    # claude-afe
-    if has_mcp_server(project_root, "claude-afe"):
-        ok("claude-afe already configured")
-        record(SetupResult("claude-afe", "claude-afe", 5,
-                           health_ccsetup_server("claude-afe")))
-    elif ask_yes_no(
-        "[experimental] Enable claude-afe? (cognitive compiler — task → agent spec with function bundle + distortion guards)\n"
-        "    Reads mind/charter/witness context. Compiles System Prompt Fragment for Agent tool spawn.\n"
-        "    Bundled server — requires 'bash install.sh' from ccsetup source.",
-        default=False, tool_id="claude-afe",
-    ):
-        _setup_claude_afe(project_root)
-    else:
-        record(SetupResult("claude-afe", "claude-afe", 5, ToolHealth.SKIPPED))
-
     hr()
 
     # claude-ledger
@@ -1679,13 +1638,12 @@ def show_status(project_root: Path) -> None:
             ("claude-mind",     "claude-mind",           "python3",     []),
             ("claude-charter",  "claude-charter",        "python3",     []),
             ("claude-witness",  "claude-witness",        "python3",     []),
-            ("claude-afe",      "claude-afe",            "python3",     []),
             ("claude-retina",   "claude-retina",         "python3",     []),
             ("claude-ledger",   "claude-ledger",         "python3",     []),
             ("seu-claude",      "seu-claude",           "npx",         []),
             ("codegraphcontext","CodeGraphContext",     "cgc",         []),
         ]
-        _ccsetup_bundled = {"claude-mind", "claude-charter", "claude-witness", "claude-afe",
+        _ccsetup_bundled = {"claude-mind", "claude-charter", "claude-witness",
                             "claude-retina", "claude-ledger"}
         for key, name, binary, envs in mcp_checks:
             if key not in servers:
@@ -1945,15 +1903,6 @@ _TOOL_CATALOG: dict[str, list[tuple[str, str, str]]] = {
         ("get_session_stats","(none)",                             "Running session cost dashboard"),
         ("log_usage",        "input_tokens, output_tokens, description?", "Record usage for cost tracking"),
     ],
-    "claude-afe": [
-        ("afe_compile",    "task, regime?, template?, domain?, locus?, modality?",  "Before spawning Agent tool — compile cognitive posture from task"),
-        ("afe_templates",  "regime?, domain?, filter?",                              "Browse 11 templates (6 synthetic, 4 canonical, 1 orchestrator)"),
-        ("afe_inspect",    "id",                                                      "Full spec detail + system_prompt_fragment for Agent spawn"),
-        ("afe_validate",   "spec_id",                                                 "Check spec against charter constraints + coherence"),
-        ("afe_ecology",    "task, phases?",                                           "Multi-phase agent chain: explore→plan→implement→review"),
-        ("afe_context",    "include?",                                                "Pull mind/charter/witness context before compilation"),
-        ("afe_history",    "limit?, filter?",                                         "List past compiled specs"),
-    ],
     "claude-retina": [
         ("retina_capture",   "url, selector?, viewport?, scheme?, label?, wait_ms?",  "See what the running UI actually looks like"),
         ("retina_diff",      "capture_a, capture_b, threshold?",                       "Compare two screenshots pixel-by-pixel — find what changed"),
@@ -2019,23 +1968,6 @@ _WORKFLOWS = """## Workflows
 2. get_symbols_overview("src/")        → file-by-file symbol maps
 3. find_symbol("MainClass", depth=1)   → class structure
 4. find_referencing_symbols("key_fn")  → understand call graph
-```
-
-### Agent Compilation (before complex Agent spawn)
-```
-1. afe_context()                         → see investigation/constraints/test state
-2. afe_templates(domain: "CoreLogic")    → pick the right template
-3. afe_compile(task: "...")              → compile spec with distortion guards
-4. afe_validate(spec_id: "...")          → verify against charter
-5. Use spec's system_prompt_fragment when spawning Agent tool
-```
-
-### Multi-Phase Agent Ecology
-```
-1. afe_ecology(task: "build full feature") → 4-phase chain
-2. Execute Phase 1 spec → get handoff artifact
-3. Execute Phase 2 spec with handoff → get next artifact
-4. Continue until all phases complete
 ```
 
 ### Visual UI Testing
