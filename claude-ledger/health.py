@@ -61,6 +61,16 @@ def _check_bundled(mcp_key: str) -> bool:
     return (_SHARE_DIR / mcp_key / "server.py").exists()
 
 
+def _get_extension_health(mcp_key: str) -> dict | None:
+    """Check if an extension has health config for this key."""
+    try:
+        import extensions as _ext
+        ext_health = _ext.get_extended_health()
+        return ext_health.get(mcp_key)
+    except Exception:
+        return None
+
+
 def check_tool(mcp_key: str) -> dict:
     """Return health dict for one tool.
 
@@ -115,6 +125,47 @@ def check_tool(mcp_key: str) -> dict:
             "status": "missing_binary",
             "detail": f"binary '{binary}' not found in PATH",
         }
+
+    # Check extension health config
+    ext_health = _get_extension_health(mcp_key)
+    if ext_health:
+        htype = ext_health.get("type", "none")
+        if htype == "binary":
+            ext_binary = ext_health.get("binary", "")
+            if ext_binary:
+                if _check_binary(ext_binary):
+                    return {
+                        "mcp_key": mcp_key,
+                        "configured": True,
+                        "healthy": True,
+                        "status": "healthy",
+                        "detail": f"binary '{ext_binary}' found (extension)",
+                    }
+                return {
+                    "mcp_key": mcp_key,
+                    "configured": True,
+                    "healthy": False,
+                    "status": "missing_binary",
+                    "detail": f"binary '{ext_binary}' not found in PATH (extension)",
+                }
+        elif htype == "bundled":
+            bundled_path = ext_health.get("path", "")
+            if bundled_path and Path(bundled_path).exists():
+                return {
+                    "mcp_key": mcp_key,
+                    "configured": True,
+                    "healthy": True,
+                    "status": "healthy",
+                    "detail": f"bundled at {bundled_path} (extension)",
+                }
+            elif bundled_path:
+                return {
+                    "mcp_key": mcp_key,
+                    "configured": True,
+                    "healthy": False,
+                    "status": "missing_file",
+                    "detail": f"file not found at {bundled_path} (extension)",
+                }
 
     # No binary check — assume healthy if configured
     return {
@@ -382,7 +433,7 @@ def diagnose_tool(mcp_key: str) -> dict:
     issues: list[str] = []
     fixes: list[dict] = []
 
-    req_spec = _cat.TOOL_REQUIREMENTS.get(mcp_key, {})
+    req_spec = _cat.get_full_requirements().get(mcp_key, {})
     for req in req_spec.get("requires", []):
         rtype = req["type"]
 

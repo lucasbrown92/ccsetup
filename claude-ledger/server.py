@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """claude-ledger MCP server — operational router and meta-orchestrator.
 
-12 tools:
+15 tools:
   ledger_context    (none)                       — CALL THIS FIRST: full operational brief
   ledger_query      task, healthy_only?           — concrete call sequence for any task
   ledger_rules      section?                      — operational rules (anti-patterns, gates)
@@ -14,6 +14,9 @@
   ledger_mode       mode?                         — get or set token priority mode
   ledger_preflight  change, files?               — pre-change impact synthesis (CLEAR/CAUTION/BLOCKED)
   ledger_correlate  query, scope?                — unified cross-tool search
+  ledger_register   mcp_key, tools, keywords?... — dynamically register an MCP server
+  ledger_unregister mcp_key                      — remove a dynamic extension
+  ledger_extensions (none)                       — list all dynamic extensions
 
 Design intent: ledger_context() is the FIRST call every session. It returns the complete
 operational brief Claude needs to route correctly without reminders from the user.
@@ -36,6 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import catalog as _catalog
+import extensions as _ext
 import health as _health
 import router as _router
 import rules as _rules
@@ -387,8 +391,10 @@ def ledger_context() -> str:
 
     # ── MISSING TOOLS ──────────────────────────────────────────────────────
     if profile["show_not_configured"]:
+        full_catalog = _catalog.get_full_catalog()
+        full_layers = _catalog.get_full_layers()
         configured_keys = set(servers.keys())
-        all_catalog_keys = set(_catalog.TOOL_CATALOG.keys())
+        all_catalog_keys = set(full_catalog.keys())
         missing = all_catalog_keys - configured_keys - {"claude-ledger"}
 
         if missing:
@@ -397,9 +403,9 @@ def ledger_context() -> str:
                 "─" * 40,
             ]
             for key in sorted(missing)[:4]:
-                tools = _catalog.TOOL_CATALOG.get(key, [])
+                tools = full_catalog.get(key, [])
                 if tools:
-                    layer = _catalog.LAYER_MAP.get(key, "?")
+                    layer = full_layers.get(key, "?")
                     layer_name = _catalog.LAYER_NAMES.get(layer, f"Layer {layer}")
                     lines.append(f"  {key} (Layer {layer} — {layer_name}): {tools[0][2].lower()}")
             lines.append("")
@@ -496,7 +502,8 @@ def ledger_query(task: str, healthy_only: bool = False, mode: str | None = None)
                 lines.append(f"    [degraded: {h.get('detail', '?')}]")
 
             # Show 2-3 most relevant tools
-            tools = _catalog.TOOL_CATALOG.get(key, [])
+            full_catalog = _catalog.get_full_catalog()
+            tools = full_catalog.get(key, [])
             task_tokens = set(task.lower().split())
             relevant = sorted(
                 tools,
@@ -613,13 +620,15 @@ def ledger_rules(section: str | None = None) -> str:
 def ledger_available(layer: int | None = None, healthy_only: bool = False) -> str:
     servers = _health.load_mcp_servers()
     all_healths = {r["mcp_key"]: r for r in _health.check_all()}
+    full_layers = _catalog.get_full_layers()
+    full_catalog = _catalog.get_full_catalog()
 
     if not servers:
         return "No MCP servers configured in .mcp.json.\nRun: ccsetup . to configure tools."
 
     by_layer: dict[int, list[str]] = {}
     for key in servers:
-        lyr = _catalog.LAYER_MAP.get(key, 99)
+        lyr = full_layers.get(key, 99)
         by_layer.setdefault(lyr, []).append(key)
 
     lines = [f"Configured tools ({len(servers)} servers):\n"]
@@ -636,7 +645,7 @@ def ledger_available(layer: int | None = None, healthy_only: bool = False) -> st
                 continue
             icon = "✓" if healthy else "✗"
             detail = h.get("detail", "")
-            tool_count = len(_catalog.TOOL_CATALOG.get(key, []))
+            tool_count = len(full_catalog.get(key, []))
             lines.append(f"    {icon} {key}  ({tool_count} tools)")
             if not healthy and detail:
                 lines.append(f"      ⚠ {detail}")
@@ -842,6 +851,7 @@ def ledger_workflows(tag: str | None = None) -> str:
 
 def ledger_catalog(mcp_key: str | None = None, configured_only: bool = False) -> str:
     servers = _health.load_mcp_servers()
+    full_catalog = _catalog.get_full_catalog()
 
     if mcp_key:
         # Also check skills catalog
@@ -855,28 +865,36 @@ def ledger_catalog(mcp_key: str | None = None, configured_only: bool = False) ->
                 lines.append("")
             return "\n".join(lines)
 
-        tools = _catalog.TOOL_CATALOG.get(mcp_key)
+        tools = full_catalog.get(mcp_key)
         if tools is None:
-            known = list(_catalog.TOOL_CATALOG.keys()) + ["skills"]
+            known = list(full_catalog.keys()) + ["skills"]
             return f"No catalog entry for '{mcp_key}'.\nKnown: {', '.join(known)}"
-        lines = [f"Tools for {mcp_key} ({len(tools)} tools):\n"]
+        is_ext = mcp_key not in _catalog.TOOL_CATALOG
+        ext_tag = " (extension)" if is_ext else ""
+        lines = [f"Tools for {mcp_key}{ext_tag} ({len(tools)} tools):\n"]
         for tname, params, when in tools:
             lines.append(f"  {tname}({params})")
             lines.append(f"    → {when}")
             lines.append("")
         return "\n".join(lines)
 
-    keys = list(_catalog.TOOL_CATALOG.keys())
+    keys = list(full_catalog.keys())
     if configured_only:
         keys = [k for k in keys if k in servers]
 
     lines = [f"Tool catalog ({len(keys)} servers):\n"]
+    ext_keys = set(full_catalog.keys()) - set(_catalog.TOOL_CATALOG.keys())
     for key in keys:
-        tools = _catalog.TOOL_CATALOG[key]
+        tools = full_catalog[key]
         status = "✓" if key in servers else "○"
-        lines.append(f"{status} {key} ({len(tools)} tools)")
+        ext_tag = " ⊕" if key in ext_keys else ""
+        lines.append(f"{status} {key}{ext_tag} ({len(tools)} tools)")
         for tname, params, _ in tools:
             lines.append(f"  {tname}({params})")
+        lines.append("")
+
+    if ext_keys:
+        lines.append(f"⊕ = dynamic extension ({len(ext_keys)} server(s))")
         lines.append("")
 
     # Skills section
@@ -1185,6 +1203,111 @@ def ledger_correlate(query: str, scope: str | None = None) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Extension management tools
+# ─────────────────────────────────────────────────────────────────────────────
+
+def ledger_register(mcp_key: str, tools: list[dict],
+                    keywords: list[str] | None = None,
+                    intent_phrases: list[str] | None = None,
+                    anti_keywords: list[str] | None = None,
+                    description: str | None = None,
+                    layer: int = 6,
+                    weight: float = 1.0,
+                    health_type: str = "none",
+                    health_binary: str | None = None) -> str:
+    """Register or update a dynamic MCP server in the ledger.
+
+    This persists to .claude/ledger-extensions.json and is merged at runtime
+    with the hardcoded catalog, router, and health data.
+
+    Args:
+        mcp_key: MCP server key (e.g. "vele")
+        tools: List of {name, params, when} dicts for the tool catalog
+        keywords: Router keywords for task matching
+        intent_phrases: Router intent phrases
+        anti_keywords: Router anti-keywords
+        description: One-line description for routing
+        layer: Layer assignment (0-6)
+        weight: Router weight (default 1.0)
+        health_type: "binary" | "bundled" | "none"
+        health_binary: Binary name for health_type="binary"
+    """
+    catalog_entries = []
+    for t in tools:
+        if not isinstance(t, dict) or "name" not in t:
+            continue
+        catalog_entries.append({
+            "name": t["name"],
+            "params": t.get("params", ""),
+            "when": t.get("when", ""),
+        })
+
+    router_config = None
+    if keywords:
+        router_config = {
+            "keywords": keywords,
+            "intent_phrases": intent_phrases or [],
+            "anti_keywords": anti_keywords or [],
+            "weight": weight,
+            "description": description or f"{mcp_key} MCP server",
+        }
+
+    health_config = {"type": health_type}
+    if health_type == "binary" and health_binary:
+        health_config["binary"] = health_binary
+
+    result = _ext.register(
+        mcp_key=mcp_key,
+        catalog=catalog_entries,
+        router=router_config,
+        health=health_config,
+        layer=layer,
+    )
+
+    return (
+        f"{result}\n\n"
+        f"The ledger will now include {mcp_key} in:\n"
+        f"  - ledger_catalog('{mcp_key}') — {len(catalog_entries)} tools\n"
+        f"  - ledger_available() — layer {layer}\n"
+        + (f"  - ledger_query() — keyword routing ({len(keywords)} keywords)\n" if keywords else "")
+        + (f"  - ledger_health('{mcp_key}') — checks '{health_binary}' binary\n" if health_binary else "")
+        + f"\nPersisted to .claude/ledger-extensions.json"
+    )
+
+
+def ledger_unregister(mcp_key: str) -> str:
+    """Remove a dynamically registered MCP server from the ledger."""
+    # Prevent removing hardcoded entries
+    if mcp_key in _catalog.TOOL_CATALOG:
+        return f"Cannot unregister '{mcp_key}' — it is a built-in catalog entry, not a dynamic extension."
+    return _ext.unregister(mcp_key)
+
+
+def ledger_extensions() -> str:
+    """List all dynamically registered MCP server extensions."""
+    exts = _ext.list_extensions()
+    if not exts:
+        return (
+            "No dynamic extensions registered.\n\n"
+            "Use ledger_register() to add MCP servers dynamically.\n"
+            "Extensions persist in .claude/ledger-extensions.json."
+        )
+
+    lines = [f"Dynamic extensions ({len(exts)}):\n"]
+    for e in exts:
+        router_tag = " + routing" if e["has_router"] else ""
+        health_tag = f" + health:{e['health_type']}" if e["health_type"] != "none" else ""
+        lines.append(
+            f"  {e['mcp_key']}  (layer {e['layer']}, {e['tool_count']} tools{router_tag}{health_tag})"
+        )
+
+    lines.append("")
+    lines.append("Stored in: .claude/ledger-extensions.json")
+    lines.append("Use ledger_unregister(mcp_key) to remove.")
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MCP protocol
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1403,6 +1526,104 @@ TOOLS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "ledger_register",
+        "description": (
+            "Dynamically register an MCP server in the ledger. "
+            "Adds tool catalog entries, keyword routing, health checks, and layer assignment. "
+            "Persists to .claude/ledger-extensions.json — survives across sessions. "
+            "Use this when a new MCP server is added to .mcp.json and you want the ledger "
+            "to know about its tools for routing, catalog, and health checks. "
+            "Example: after adding 'vele' to .mcp.json, call ledger_register with its tools "
+            "so ledger_query/ledger_catalog/ledger_available include it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mcp_key": {
+                    "type": "string",
+                    "description": "MCP server key as it appears in .mcp.json (e.g. 'vele').",
+                },
+                "tools": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Tool name (e.g. 'vele/ask')"},
+                            "params": {"type": "string", "description": "Parameter summary (e.g. 'question, mode?')"},
+                            "when": {"type": "string", "description": "When to use this tool"},
+                        },
+                        "required": ["name"],
+                    },
+                    "description": "Tool catalog entries: [{name, params?, when?}]",
+                },
+                "keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Router keywords for task matching (e.g. ['knowledge', 'epistemic', 'graph']).",
+                },
+                "intent_phrases": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Router intent phrases (e.g. ['what does vele know', 'epistemic state']).",
+                },
+                "anti_keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Keywords that should reduce this route's score.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "One-line description for routing display.",
+                },
+                "layer": {
+                    "type": "integer",
+                    "description": "Layer assignment (0=Foundation, 1=Context, 2=Memory, 3=Safety, 4=Observability, 5=Orchestration, 6=Workflow). Default: 6.",
+                },
+                "weight": {
+                    "type": "number",
+                    "description": "Router weight multiplier (default 1.0). >1 boosts, <1 suppresses.",
+                },
+                "health_type": {
+                    "type": "string",
+                    "enum": ["binary", "bundled", "none"],
+                    "description": "Health check type: 'binary' checks PATH, 'bundled' checks file, 'none' skips. Default: 'none'.",
+                },
+                "health_binary": {
+                    "type": "string",
+                    "description": "Binary name to check in PATH (for health_type='binary').",
+                },
+            },
+            "required": ["mcp_key", "tools"],
+        },
+    },
+    {
+        "name": "ledger_unregister",
+        "description": (
+            "Remove a dynamically registered MCP server from the ledger. "
+            "Only removes extensions — cannot remove built-in catalog entries. "
+            "Removes from .claude/ledger-extensions.json."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mcp_key": {
+                    "type": "string",
+                    "description": "MCP key to remove (e.g. 'vele').",
+                },
+            },
+            "required": ["mcp_key"],
+        },
+    },
+    {
+        "name": "ledger_extensions",
+        "description": (
+            "List all dynamically registered MCP server extensions. "
+            "Shows tool count, layer, routing status, and health check type for each. "
+            "Extensions are stored in .claude/ledger-extensions.json."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 
@@ -1432,6 +1653,23 @@ def dispatch(method: str, params: dict) -> str:
                                 change_type=params.get("change_type"))
     if method == "ledger_correlate":
         return ledger_correlate(params["query"], scope=params.get("scope"))
+    if method == "ledger_register":
+        return ledger_register(
+            mcp_key=params["mcp_key"],
+            tools=params["tools"],
+            keywords=params.get("keywords"),
+            intent_phrases=params.get("intent_phrases"),
+            anti_keywords=params.get("anti_keywords"),
+            description=params.get("description"),
+            layer=params.get("layer", 6),
+            weight=params.get("weight", 1.0),
+            health_type=params.get("health_type", "none"),
+            health_binary=params.get("health_binary"),
+        )
+    if method == "ledger_unregister":
+        return ledger_unregister(params["mcp_key"])
+    if method == "ledger_extensions":
+        return ledger_extensions()
     raise ValueError(f"Unknown method: {method}")
 
 

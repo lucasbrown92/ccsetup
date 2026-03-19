@@ -15,11 +15,15 @@ The design philosophy: **Claude is the primary user.** Every tool is evaluated f
 bash install.sh
 
 # Run from any repo
-ccsetup .                   # full interactive setup
+ccsetup .                   # full interactive setup (auto-checks for updates)
 ccsetup . --status          # show what's already configured
 ccsetup . --dry-run         # preview without writing
 ccsetup . --no-launch       # skip 'dgc .' at end
 ccsetup . --from-layer 3    # resume from a specific layer
+ccsetup . --no-update       # skip auto-update check
+
+# Update ccsetup + bundled servers from GitHub
+ccsetup update              # check and apply all available updates
 
 # Dev / test
 python ccsetup.py . --dry-run    # run directly without installing

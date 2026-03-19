@@ -4,6 +4,9 @@
 This is a copy of _TOOL_CATALOG from ccsetup.py, kept in sync at install time.
 Includes entries for claude-retina and claude-ledger itself (10 tools).
 
+Dynamic extensions from .claude/ledger-extensions.json are merged at runtime
+via get_full_catalog(), get_full_layers(), and get_full_requirements().
+
 Each entry: (tool_name, params_summary, when_to_use)
 """
 
@@ -200,18 +203,22 @@ TOOL_CATALOG: dict[str, list[tuple[str, str, str]]] = {
          "List recent captures, diffs, baselines, and interactions. type: capture|diff|baseline|interact."),
     ],
     "claude-ledger": [
-        ("ledger_context",   "(none)",                       "Session-start briefing: mode + health + active state + recommended next steps. Call first every session."),
-        ("ledger_query",     "task, healthy_only?",          "What tools to use for a given task — opinionated routing with call sequence and MCP scores."),
-        ("ledger_mode",      "mode?",                        "Get or set token priority mode: economy | balanced | performance. Persists to .claude/ledger-mode.json."),
-        ("ledger_diagnose",  "tool?",                        "Full prerequisite diagnosis — root cause + fix steps for degraded tools."),
-        ("ledger_fix",       "tool",                         "Auto-apply fixable issues: hooks, env vars, Serena language drift."),
-        ("ledger_available", "layer?, healthy_only?",        "List all configured tools by layer with health status."),
-        ("ledger_health",    "tool?",                        "Real-time health check for all or one tool (rechecks now, not cached)."),
-        ("ledger_workflows", "tag?",                         "Canonical workflow patterns: session-start, debugging, investigation, agent-spawn, visual-ui, etc."),
-        ("ledger_catalog",   "mcp_key?, configured_only?",  "Full tool signatures for one or all MCP servers."),
-        ("ledger_rules",     "section?",                     "Operational rules: anti-patterns, mandatory gates, priority chains, token habits, skills catalog."),
+        ("ledger_context",    "(none)",                       "Session-start briefing: mode + health + active state + recommended next steps. Call first every session."),
+        ("ledger_query",      "task, healthy_only?",          "What tools to use for a given task — opinionated routing with call sequence and MCP scores."),
+        ("ledger_mode",       "mode?",                        "Get or set token priority mode: economy | balanced | performance. Persists to .claude/ledger-mode.json."),
+        ("ledger_diagnose",   "tool?",                        "Full prerequisite diagnosis — root cause + fix steps for degraded tools."),
+        ("ledger_fix",        "tool",                         "Auto-apply fixable issues: hooks, env vars, Serena language drift."),
+        ("ledger_available",  "layer?, healthy_only?",        "List all configured tools by layer with health status."),
+        ("ledger_health",     "tool?",                        "Real-time health check for all or one tool (rechecks now, not cached)."),
+        ("ledger_workflows",  "tag?",                         "Canonical workflow patterns: session-start, debugging, investigation, agent-spawn, visual-ui, etc."),
+        ("ledger_catalog",    "mcp_key?, configured_only?",  "Full tool signatures for one or all MCP servers (includes dynamic extensions)."),
+        ("ledger_rules",      "section?",                     "Operational rules: anti-patterns, mandatory gates, priority chains, token habits, skills catalog."),
         ("ledger_preflight",  "change, files?, change_type?", "Pre-change impact synthesis: charter + mind + witness + retina. Returns CLEAR/CAUTION/BLOCKED. change_type boosts charter scoring 2x. Subsumes charter_check."),
-        ("ledger_correlate",  "query, scope?",              "Unified cross-tool search — everything known about a topic across all cognitive tools."),
+        ("ledger_correlate",  "query, scope?",               "Unified cross-tool search — everything known about a topic across all cognitive tools."),
+        ("ledger_register",   "mcp_key, tools, keywords?, intent_phrases?, anti_keywords?, description?, layer?, weight?, health_type?, health_binary?",
+         "Dynamically register an MCP server. Persists to .claude/ledger-extensions.json. Use when a new MCP server is added to .mcp.json."),
+        ("ledger_unregister", "mcp_key",                     "Remove a dynamically registered MCP server extension. Cannot remove built-in entries."),
+        ("ledger_extensions", "(none)",                       "List all dynamically registered MCP server extensions with tool counts, layers, and health status."),
     ],
 }
 
@@ -374,3 +381,29 @@ TOOL_REQUIREMENTS: dict[str, dict] = {
         ],
     },
 }
+
+
+# ── Runtime merge with extensions ─────────────────────────────────────────────
+
+def get_full_catalog() -> dict[str, list[tuple[str, str, str]]]:
+    """Return TOOL_CATALOG merged with dynamic extensions."""
+    import extensions as _ext
+    merged = dict(TOOL_CATALOG)
+    merged.update(_ext.get_extended_catalog())
+    return merged
+
+
+def get_full_layers() -> dict[str, int]:
+    """Return LAYER_MAP merged with dynamic extensions."""
+    import extensions as _ext
+    merged = dict(LAYER_MAP)
+    merged.update(_ext.get_extended_layers())
+    return merged
+
+
+def get_full_requirements() -> dict[str, dict]:
+    """Return TOOL_REQUIREMENTS merged with dynamic extensions."""
+    import extensions as _ext
+    merged = dict(TOOL_REQUIREMENTS)
+    merged.update(_ext.get_extended_requirements())
+    return merged

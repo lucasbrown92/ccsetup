@@ -19,7 +19,8 @@ echo "  ✔ Installed to: $TARGET"
 
 # Install bundled MCP servers
 mkdir -p "$SHARE_DIR"
-for server in claude-mind claude-charter claude-witness claude-afe claude-retina claude-ledger; do
+BUNDLED_SERVERS="claude-mind claude-charter claude-witness claude-retina claude-ledger"
+for server in $BUNDLED_SERVERS; do
   if [[ -d "$SCRIPT_DIR/$server" ]]; then
     rm -rf "$SHARE_DIR/$server"
     cp -r "$SCRIPT_DIR/$server" "$SHARE_DIR/$server"
@@ -29,7 +30,7 @@ done
 
 echo ""
 echo "  Verifying bundled servers…"
-for server in claude-mind claude-charter claude-witness claude-afe claude-retina claude-ledger; do
+for server in $BUNDLED_SERVERS; do
   srv="$SHARE_DIR/$server/server.py"
   if [[ -f "$srv" ]]; then
     echo "  ✔ $server"
@@ -82,4 +83,5 @@ echo "    ccsetup . --status              # health-aware status report"
 echo "    ccsetup . --dry-run             # preview without writing"
 echo "    ccsetup . --preset recommended  # non-interactive curated setup"
 echo "    ccsetup . --from-layer 3        # resume from a specific layer"
+echo "    ccsetup update                  # check for and apply updates from GitHub"
 echo ""

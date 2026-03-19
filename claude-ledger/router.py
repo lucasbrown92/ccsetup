@@ -233,6 +233,21 @@ def score_route(task: str, route: dict, mode: str = "balanced") -> float:
     return max(0.0, min(1.0, raw))
 
 
+def _get_all_routes() -> list[dict]:
+    """Return ROUTE_INDEX merged with dynamic extension routes."""
+    import extensions as _ext
+    ext_routes = _ext.get_extended_routes()
+    if not ext_routes:
+        return ROUTE_INDEX
+    # Deduplicate: extensions override hardcoded entries with same mcp_key
+    hardcoded_keys = {r["mcp_key"] for r in ROUTE_INDEX}
+    merged = list(ROUTE_INDEX)
+    for r in ext_routes:
+        if r["mcp_key"] not in hardcoded_keys:
+            merged.append(r)
+    return merged
+
+
 def route(task: str, available_keys: set[str] | None = None,
           min_score: float | None = None, top_n: int | None = None,
           mode: str = "balanced") -> list[dict]:
@@ -252,8 +267,9 @@ def route(task: str, available_keys: set[str] | None = None,
     effective_min = min_score if min_score is not None else profile["route_min_score"]
     effective_top = top_n if top_n is not None else profile["route_max"]
 
+    all_routes = _get_all_routes()
     scored = []
-    for entry in ROUTE_INDEX:
+    for entry in all_routes:
         key = entry["mcp_key"]
         if available_keys is not None and key not in available_keys:
             continue

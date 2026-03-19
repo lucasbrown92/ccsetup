@@ -56,7 +56,17 @@ from typing import Any, Callable
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
+
+GITHUB_REPO = "lucasbrown92/ccsetup"
+GITHUB_BRANCH = "main"
+GITHUB_RAW_BASE = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}"
+
+# Bundled MCP servers that ship with ccsetup and are installed to ~/.local/share/ccsetup/
+BUNDLED_SERVERS: list[str] = [
+    "claude-mind", "claude-charter", "claude-witness",
+    "claude-retina", "claude-ledger",
+]
 
 _USE_COLOR = sys.stdout.isatty()
 RESET  = "\033[0m"   if _USE_COLOR else ""
@@ -757,6 +767,252 @@ def health_ccsetup_server(server_name: str) -> ToolHealth:
     if not _ccsetup_server_installed(server_name):
         return ToolHealth.NOT_CONFIGURED
     return ToolHealth.HEALTHY
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Auto-update system
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fetch_url(url: str, timeout: int = 10) -> str | None:
+    """Fetch a URL and return body text, or None on failure."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": f"ccsetup/{VERSION}"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8")
+    except Exception:
+        return None
+
+
+def _extract_version(text: str) -> str | None:
+    """Extract VERSION = 'X.Y.Z' from a Python source string."""
+    import re
+    m = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """Convert '1.2.3' to (1, 2, 3) for comparison."""
+    parts: list[int] = []
+    for p in v.split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+def _check_remote_version(component: str = "ccsetup") -> tuple[str | None, str | None]:
+    """Check the remote version for a component.
+
+    Args:
+        component: 'ccsetup' for the main script, or a server name like 'claude-ledger'
+
+    Returns:
+        (remote_version, raw_url) or (None, None) on failure
+    """
+    if component == "ccsetup":
+        url = f"{GITHUB_RAW_BASE}/ccsetup.py"
+    else:
+        url = f"{GITHUB_RAW_BASE}/{component}/server.py"
+
+    text = _fetch_url(url)
+    if text is None:
+        return None, None
+    version = _extract_version(text)
+    return version, url
+
+
+def _get_local_server_version(server_name: str) -> str | None:
+    """Read the VERSION from a locally installed bundled server."""
+    server_py = _ccsetup_share() / server_name / "server.py"
+    if not server_py.exists():
+        return None
+    try:
+        # Read just the first 50 lines — VERSION is always near the top
+        with open(server_py, encoding="utf-8") as f:
+            head = "".join(f.readline() for _ in range(50))
+        return _extract_version(head)
+    except OSError:
+        return None
+
+
+def _download_and_replace_file(url: str, dest: Path) -> bool:
+    """Download a file from URL and write to dest. Returns True on success."""
+    text = _fetch_url(url, timeout=30)
+    if text is None:
+        return False
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def _list_remote_server_files(server_name: str) -> list[str]:
+    """Get file list for a bundled server from GitHub API."""
+    api_url = (
+        f"https://api.github.com/repos/{GITHUB_REPO}"
+        f"/contents/{server_name}?ref={GITHUB_BRANCH}"
+    )
+    text = _fetch_url(api_url, timeout=10)
+    if text is None:
+        return []
+    try:
+        entries = json.loads(text)
+        if not isinstance(entries, list):
+            return []
+        return [e["name"] for e in entries
+                if isinstance(e, dict) and e.get("type") == "file"]
+    except (json.JSONDecodeError, KeyError):
+        return []
+
+
+def check_for_updates(quiet: bool = False) -> dict[str, tuple[str, str]]:
+    """Check all components for available updates.
+
+    Returns:
+        Dict of {component: (local_version, remote_version)} for components
+        that have updates available.
+    """
+    updates: dict[str, tuple[str, str]] = {}
+
+    # Check ccsetup.py itself
+    remote_ver, _ = _check_remote_version("ccsetup")
+    if remote_ver and _version_tuple(remote_ver) > _version_tuple(VERSION):
+        updates["ccsetup"] = (VERSION, remote_ver)
+        if not quiet:
+            info(f"ccsetup: {VERSION} → {remote_ver}")
+
+    # Check each bundled server
+    for server in BUNDLED_SERVERS:
+        local_ver = _get_local_server_version(server)
+        if local_ver is None:
+            continue  # Not installed locally — nothing to update
+        remote_ver, _ = _check_remote_version(server)
+        if remote_ver and _version_tuple(remote_ver) > _version_tuple(local_ver):
+            updates[server] = (local_ver, remote_ver)
+            if not quiet:
+                info(f"{server}: {local_ver} → {remote_ver}")
+
+    return updates
+
+
+def apply_updates(updates: dict[str, tuple[str, str]]) -> dict[str, bool]:
+    """Download and apply updates for the given components.
+
+    Args:
+        updates: {component: (old_ver, new_ver)} from check_for_updates()
+
+    Returns:
+        {component: success_bool}
+    """
+    results: dict[str, bool] = {}
+
+    for component, (old_ver, new_ver) in updates.items():
+        if component == "ccsetup":
+            # Update the ccsetup script itself
+            url = f"{GITHUB_RAW_BASE}/ccsetup.py"
+            dest = Path(shutil.which("ccsetup") or str(Path.home() / ".local" / "bin" / "ccsetup"))
+            success = _download_and_replace_file(url, dest)
+            if success:
+                dest.chmod(dest.stat().st_mode | 0o755)
+                ok(f"ccsetup: {old_ver} → {new_ver}")
+            else:
+                err(f"ccsetup: failed to download update")
+            results[component] = success
+        else:
+            # Update a bundled server — need all files, not just server.py
+            server_dir = _ccsetup_share() / component
+            files = _list_remote_server_files(component)
+            if not files:
+                # Fallback: at least update server.py
+                files = ["server.py"]
+
+            all_ok = True
+            for fname in files:
+                url = f"{GITHUB_RAW_BASE}/{component}/{fname}"
+                dest = server_dir / fname
+                if not _download_and_replace_file(url, dest):
+                    err(f"{component}/{fname}: failed to download")
+                    all_ok = False
+
+            if all_ok:
+                ok(f"{component}: {old_ver} → {new_ver} ({len(files)} files)")
+            else:
+                warn(f"{component}: partial update ({len(files)} files attempted)")
+            results[component] = all_ok
+
+    return results
+
+
+def run_update(auto: bool = False) -> bool:
+    """Full update flow: check + apply.
+
+    Args:
+        auto: If True, runs silently on auto-check (during `ccsetup .`).
+              If False, runs verbosely (during `ccsetup update`).
+
+    Returns:
+        True if any updates were applied.
+    """
+    if auto:
+        # Quick silent check — only print if updates found
+        updates = check_for_updates(quiet=True)
+        if not updates:
+            return False
+        # Show what's available
+        print()
+        print(f"  {BOLD}{CYAN}Updates available:{RESET}")
+        for comp, (old_v, new_v) in updates.items():
+            print(f"    {comp}: {old_v} → {new_v}")
+        print()
+        if not _ASSUME_YES:
+            if not ask_yes_no("Apply updates before continuing?", default=True):
+                return False
+        results = apply_updates(updates)
+        updated = any(results.values())
+        if updated:
+            print()
+        return updated
+    else:
+        # Explicit `ccsetup update` — verbose
+        print()
+        print(f"{BOLD}{BLUE}  ╔══════════════════════════════════════════════════════╗{RESET}")
+        print(f"{BOLD}{BLUE}  ║           ccsetup update — v{VERSION:>8}                 ║{RESET}")
+        print(f"{BOLD}{BLUE}  ╚══════════════════════════════════════════════════════╝{RESET}")
+        print()
+        info("Checking for updates...")
+        print()
+
+        updates = check_for_updates(quiet=False)
+        if not updates:
+            ok("Everything is up to date.")
+            print()
+            # Show current versions
+            print(f"  {DIM}ccsetup: {VERSION}{RESET}")
+            for server in BUNDLED_SERVERS:
+                local_ver = _get_local_server_version(server)
+                if local_ver:
+                    print(f"  {DIM}{server}: {local_ver}{RESET}")
+            print()
+            return False
+
+        print()
+        results = apply_updates(updates)
+        updated = any(results.values())
+
+        print()
+        if updated:
+            ok("Updates applied successfully.")
+            # If ccsetup itself was updated, warn about re-running
+            if results.get("ccsetup"):
+                print()
+                info("ccsetup itself was updated. Re-run your command to use the new version.")
+        else:
+            err("No updates could be applied. Check your network connection.")
+        print()
+        return updated
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2570,17 +2826,29 @@ def launch_claude(project_root: Path, claude_args: list[str]) -> None:
 def main() -> None:
     global _DRY_RUN, _ASSUME_YES, _SCOPE_MODE, _PRESET_TOOLS, _EXPERIMENTAL
 
+    # ── Handle `ccsetup update` as a special subcommand ───────────────────────
+    if len(sys.argv) >= 2 and sys.argv[1] == "update":
+        # Parse optional flags after 'update'
+        _ASSUME_YES = "--yes" in sys.argv or "-y" in sys.argv
+        run_update(auto=False)
+        return
+
     ap = argparse.ArgumentParser(
         prog="ccsetup",
         description="Per-repo Claude Code stack bootstrapper — 7-layer tool hierarchy.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Unknown flags (e.g. --continue, --resume) are forwarded to 'claude' on launch.",
+        epilog=(
+            "Unknown flags (e.g. --continue, --resume) are forwarded to 'claude' on launch.\n"
+            "Subcommands:\n"
+            "  ccsetup update          Check for and apply updates from GitHub"
+        ),
     )
     ap.add_argument("project",      nargs="?",  default=".", help="Project dir (default: .)")
     ap.add_argument("--status",     action="store_true", help="Health-aware status report and exit")
     ap.add_argument("--manifest",   action="store_true", help="Generate .claude/tool-ledger.md and exit")
     ap.add_argument("--dry-run",    action="store_true", help="Preview without writing")
     ap.add_argument("--no-launch",  action="store_true", help="Skip Claude Code launch at end")
+    ap.add_argument("--no-update",  action="store_true", help="Skip auto-update check")
     ap.add_argument("--yes", "-y",  action="store_true", help="Accept all defaults non-interactively")
     ap.add_argument("--from-layer", type=int, default=0, metavar="N",
                     help="Start from layer N (0–6)")
@@ -2617,6 +2885,20 @@ def main() -> None:
     if args.manifest:
         generate_tool_ledger(project_root)
         return
+
+    # ── Auto-update check ─────────────────────────────────────────────────────
+    # On every `ccsetup .` run, check GitHub for newer versions of ccsetup and
+    # bundled servers. Apply updates before proceeding with setup/launch.
+    if not args.no_update and not args.dry_run:
+        try:
+            updated = run_update(auto=True)
+            if updated and "ccsetup" in check_for_updates(quiet=True):
+                # ccsetup itself was updated — the running copy is stale.
+                # Re-exec with the same arguments so the new version takes over.
+                info("Re-launching with updated ccsetup...")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception:
+            pass  # Network failures should never block setup
 
     # ── Quick-launch: already configured ─────────────────────────────────────
     # If setup has already run for this project (stamp file present) and the
